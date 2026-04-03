@@ -181,7 +181,7 @@ const roleSpecificTemplates = {
       variations: ['design constraints', 'technical limitations', 'business requirements']
     },
     {
-      template: "Walk me through your process for [[SKILL]. Can you share a specific example?",
+      template: "Walk me through your process for [SKILL]. Can you share a specific example?",
       skill: 'design systems',
       variations: ['creating design systems', 'component design', 'design documentation']
     }
@@ -252,7 +252,8 @@ function generateRoleSpecificQuestions(role, baseIndex = 8) {
 
   selectedTemplates.forEach((templateObj, idx) => {
     const variation = templateObj.variations[idx % templateObj.variations.length];
-    const text = templateObj.template.replace('[SKILL]', variation);
+    // Replace ALL occurrences of [SKILL] placeholder
+    const text = templateObj.template.replaceAll('[SKILL]', variation);
 
     questions.push({
       question_index: baseIndex + idx,
