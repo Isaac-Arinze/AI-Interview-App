@@ -11,3 +11,18 @@ build/
 coverage/
 .vscode/
 .idea/
+
+# Development documentation (not for production/repo)
+VIDEO_QUICK_REFERENCE.md
+VIDEO_IMPLEMENTATION_TASKS.md
+VIDEO_ALGORITHM.md
+FEATURE_VIDEO_INTEGRATION.md
+DEPLOYMENT.md
+
+# Video uploads
+/uploads/
+*.webm
+
+# Session data
+*.session
+*.cache
