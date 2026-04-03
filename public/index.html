@@ -172,6 +172,27 @@
           <button class="btn btn-stop" onclick="endInterview()">End Interview</button>
         </div>
 
+        <!-- VIDEO RECORDING SECTION (NEW) -->
+        <div class="video-section" id="video-section" style="margin-bottom: 16px; display: none;">
+          <div class="video-container" style="position: relative; background: #000; border-radius: 10px; overflow: hidden; margin-bottom: 8px;">
+            <video id="candidate-video" 
+                   autoplay 
+                   muted 
+                   playsinline
+                   style="width: 100%; height: auto; max-height: 300px; display: block;"></video>
+            <div id="recording-badge" 
+                 style="display: none; position: absolute; bottom: 10px; right: 10px; 
+                        background: #f06a6a; color: white; padding: 6px 10px; 
+                        border-radius: 6px; font-weight: 600; font-size: 11px; font-family: 'DM Mono', monospace;">
+              🔴 RECORDING
+            </div>
+          </div>
+          <div style="margin-top: 6px; font-size: 11px; color: #888884; display: flex; justify-content: space-between;">
+            <span id="camera-status">📷 Camera Ready</span>
+            <span id="video-resolution"></span>
+          </div>
+        </div>
+
         <div class="question-text" id="interview-question">Question will appear here…</div>
 
         <div id="recording-ui">
@@ -216,6 +237,26 @@
       </div>
 
       <div id="interview-summary" style="display:none;">
+        <!-- VIDEO PLAYBACK SECTION (NEW) -->
+        <div id="video-playback" style="display: none; margin-bottom: 20px;">
+          <div style="background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 12px;">
+            <video id="review-video" controls style="width: 100%; height: auto; display: block;"></video>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn btn-clear" onclick="downloadVideo()">
+              📥 Download Recording
+            </button>
+            <button class="btn btn-clear" onclick="shareVideoLink()">
+              🔗 Share Link
+            </button>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+            <div>📹 Video: <span id="video-metadata-size">--</span> MB</div>
+            <div>⏱️ Duration: <span id="video-metadata-duration">--</span></div>
+            <div>📝 Recorded: <span id="video-metadata-date">--</span></div>
+          </div>
+        </div>
+
         <div style="margin-bottom: 24px;">
           <h2 style="font-size: 18px; margin-bottom: 8px;" id="summary-title">Interview Complete!</h2>
           <p style="color: var(--muted); font-size: 12px;">Your performance summary below</p>
@@ -567,6 +608,272 @@
   let recognitionTranscript = '';
   let recognitionActive = false;
 
+  // ===== VIDEO RECORDING VARIABLES (NEW) =====
+  let currentVideoStream = null;
+  let currentMediaRecorder = null;
+  let videoChunks = [];
+  let videoBlobURL = null;
+  let isRecordingVideo = false;
+
+  // ===== VIDEO RECORDING FUNCTIONS (NEW) =====
+  
+  async function initCameraSystem() {
+    try {
+      // Check browser support
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.warn('⚠️ Camera not supported in this browser');
+        document.getElementById('video-section').style.display = 'none';
+        return false;
+      }
+
+      // Request camera permissions
+      const constraints = {
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user'
+        },
+        audio: true
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Display stream
+      const videoElement = document.getElementById('candidate-video');
+      if (!videoElement) return false;
+      
+      videoElement.srcObject = stream;
+      currentVideoStream = stream;
+
+      // Get video resolution
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        const settings = videoTrack.getSettings();
+        document.getElementById('video-resolution').textContent = `${settings.width}x${settings.height}`;
+      }
+
+      document.getElementById('camera-status').textContent = '📷 Camera Ready';
+      document.getElementById('video-section').style.display = 'block';
+      
+      return true;
+    } catch (error) {
+      console.error('Camera access error:', error);
+      
+      let errorMsg = '❌ Camera error';
+      if (error.name === 'NotAllowedError') {
+        errorMsg = '❌ Camera permission denied';
+      } else if (error.name === 'NotFoundError') {
+        errorMsg = '❌ Camera not found';
+      } else if (error.name === 'NotReadableError') {
+        errorMsg = '❌ Camera is in use by another app';
+      }
+      
+      document.getElementById('camera-status').textContent = errorMsg;
+      document.getElementById('video-section').style.display = 'none';
+      console.warn('Camera initialization failed, proceeding without video');
+      return false;
+    }
+  }
+
+  function stopCameraStream() {
+    if (currentVideoStream) {
+      currentVideoStream.getTracks().forEach(track => {
+        if (track.readyState === 'live') {
+          track.stop();
+        }
+      });
+      currentVideoStream = null;
+    }
+  }
+
+  function startVideoRecording() {
+    if (!currentVideoStream) {
+      console.warn('Video stream not available, skipping video recording');
+      return;
+    }
+
+    try {
+      // Create MediaRecorder with WebM codec
+      const options = {
+        mimeType: 'video/webm;codecs=vp8,opus'
+      };
+
+      // Fallback if WebM not supported
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        console.warn('WebM codec not supported, using default');
+        options.mimeType = 'video/webm';
+      }
+
+      currentMediaRecorder = new MediaRecorder(currentVideoStream, options);
+      videoChunks = [];
+      isRecordingVideo = true;
+
+      // Collect video chunks
+      currentMediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          videoChunks.push(event.data);
+        }
+      };
+
+      // Handle stop
+      currentMediaRecorder.onstop = async () => {
+        isRecordingVideo = false;
+        const videoBlob = new Blob(videoChunks, { type: 'video/webm' });
+        videoBlobURL = URL.createObjectURL(videoBlob);
+        currentSession.video_blob = videoBlob;
+        currentSession.video_size_mb = (videoBlob.size / 1024 / 1024).toFixed(2);
+        currentSession.session_date = new Date().toLocaleString();
+        console.log(`✓ Video assembled: ${currentSession.video_size_mb} MB`);
+      };
+
+      currentMediaRecorder.start();
+      document.getElementById('recording-badge').style.display = 'block';
+      console.log('✓ Video recording started');
+    } catch (error) {
+      console.error('MediaRecorder error:', error);
+      isRecordingVideo = false;
+    }
+  }
+
+  function stopVideoRecording() {
+    if (currentMediaRecorder && isRecordingVideo) {
+      currentMediaRecorder.stop();
+      document.getElementById('recording-badge').style.display = 'none';
+      isRecordingVideo = false;
+    }
+  }
+
+  async function uploadVideoToServer() {
+    if (!currentSession.video_blob || !currentSession.session_id) {
+      console.warn('No video or session to upload');
+      return false;
+    }
+
+    try {
+      showStatus('📤 Uploading video recording…', 'loading', true);
+
+      // Convert blob to base64
+      const reader = new FileReader();
+      
+      return new Promise((resolve) => {
+        reader.onload = async () => {
+          try {
+            // Extract base64 data (remove the data:video/webm;base64, prefix)
+            const base64data = reader.result.split(',')[1];
+
+            const res = await fetch(`/api/aria/session/${currentSession.session_id}/video/upload`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                video_data: base64data,
+                session_id: currentSession.session_id
+              })
+            });
+
+            if (!res.ok) {
+              const error = await res.text();
+              throw new Error(error || 'Upload failed');
+            }
+
+            const result = await res.json();
+            currentSession.video_url = result.video_url;
+            console.log('✓ Video uploaded:', result.video_url);
+            showStatus('✅ Video uploaded successfully', 'success', false);
+            resolve(true);
+          } catch (error) {
+            console.error('Video upload error:', error);
+            showStatus('⚠️ Video upload failed: ' + error.message, 'error', false);
+            resolve(false);
+          }
+        };
+        
+        reader.onerror = () => {
+          console.error('FileReader error');
+          showStatus('⚠️ Error reading video file', 'error', false);
+          resolve(false);
+        };
+        
+        reader.readAsDataURL(currentSession.video_blob);
+      });
+    } catch (error) {
+      console.error('Video upload error:', error);
+      showStatus('⚠️ Video upload failed: ' + error.message, 'error', false);
+      return false;
+    }
+  }
+
+  function showVideoPlayback() {
+    if (!currentSession.video_url && !videoBlobURL) {
+      console.warn('No video available for playback');
+      return;
+    }
+
+    const videoElement = document.getElementById('review-video');
+    const playbackSection = document.getElementById('video-playback');
+    
+    if (!videoElement || !playbackSection) return;
+
+    // Use uploaded URL if available, otherwise use blob URL
+    const source = currentSession.video_url || videoBlobURL;
+    videoElement.src = source;
+
+    // Show playback section
+    playbackSection.style.display = 'block';
+
+    // Set metadata
+    if (currentSession.video_size_mb) {
+      document.getElementById('video-metadata-size').textContent = currentSession.video_size_mb;
+    }
+
+    if (currentSession.session_date) {
+      document.getElementById('video-metadata-date').textContent = currentSession.session_date;
+    }
+
+    videoElement.onloadedmetadata = () => {
+      const duration = Math.floor(videoElement.duration);
+      const mins = Math.floor(duration / 60);
+      const secs = (duration % 60).toString().padStart(2, '0');
+      document.getElementById('video-metadata-duration').textContent = `${mins}:${secs}`;
+    };
+  }
+
+  function downloadVideo() {
+    const videoElement = document.getElementById('review-video');
+    if (!videoElement || !videoElement.src) {
+      showStatus('Video not available', 'error', false);
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = videoElement.src;
+    link.download = `interview_${currentSession.session_id}_${Date.now()}.webm`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showStatus('📥 Video download started', 'success', false);
+  }
+
+  function shareVideoLink() {
+    if (!currentSession.session_id) return;
+    
+    const shareUrl = `${window.location.origin}?session=${currentSession.session_id}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Interview Recording',
+        text: 'View my interview recording',
+        url: shareUrl
+      }).catch(err => console.log('Share error:', err));
+    } else {
+      // Fallback: copy to clipboard
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        showStatus('📋 Interview link copied to clipboard', 'success', false);
+      }).catch(() => {
+        showStatus('Link: ' + shareUrl, 'info', false);
+      });
+    }
+  }
+
   async function initInterview() {
     const name = document.getElementById('candidate-name').value.trim();
     const role = document.getElementById('candidate-role').value;
@@ -592,12 +899,19 @@
         questions: []
       };
 
-      displayQuestion(data.current_question);
       document.getElementById('interview-init').style.display = 'none';
       document.getElementById('interview-active').style.display = 'block';
       document.getElementById('interview-title-name').textContent = `${name} — ${role}`;
       document.getElementById('interview-progress').textContent = `Question 1 of 20`;
       showStatus('', '', false);
+
+      // Initialize camera and video recording (NEW)
+      const cameraOk = await initCameraSystem();
+      if (cameraOk) {
+        startVideoRecording();
+      }
+
+      displayQuestion(data.current_question);
     } catch (e) {
       showStatus('Error: ' + e.message, 'error', false);
     }
@@ -914,6 +1228,10 @@ showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
 
   async function showSummary() {
     try {
+      // Stop video recording (NEW)
+      stopVideoRecording();
+      stopCameraStream();
+
       showStatus('Compiling interview results…', 'loading', true);
       const res = await fetch(`/api/aria/session/${currentSession.session_id}/summary`);
       if (!res.ok) throw new Error('Summary fetch failed');
@@ -931,6 +1249,14 @@ showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
       document.getElementById('interview-active').style.display = 'none';
       document.getElementById('interview-summary').style.display = 'block';
       showStatus('Interview complete! Your results are ready.', 'success', false);
+      
+      // Upload video and show playback (NEW)
+      if (currentSession.video_blob) {
+        const uploadOk = await uploadVideoToServer();
+        if (uploadOk) {
+          showVideoPlayback();
+        }
+      }
       
       // Speak the final results
       const finalMessage = `Interview complete. Your overall score is ${Math.round(scoring.avg_score)}. 
@@ -957,9 +1283,17 @@ showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
   }
 
   function resetInterview() {
+    // Stop video recording and cleanup (NEW)
+    stopVideoRecording();
+    stopCameraStream();
+    
+    if (videoBlobURL) {
+      URL.revokeObjectURL(videoBlobURL);
+      videoBlobURL = null;
+    }
+    videoChunks = [];
+    
     currentSession = null;
-    recordedChunks = [];
-    if (mediaRecorder) mediaRecorder.stop();
     document.getElementById('interview-init').style.display = 'block';
     document.getElementById('interview-active').style.display = 'none';
     document.getElementById('interview-summary').style.display = 'none';

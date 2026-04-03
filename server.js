@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const path = require('path');
+const fs = require('fs');
 
 // Import ARIA modules
 const ARIASession = require('./src/aria/session');
@@ -13,8 +14,15 @@ const app = express();
 const PORT = 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // ARIA session store (in-memory; use Redis/DB in production)
 const sessions = new Map();
@@ -205,6 +213,92 @@ app.delete('/api/aria/session/:id', (req, res) => {
   });
 });
 
+/**
+ * POST /api/aria/session/:id/video/upload
+ * Upload video recording for a session
+ */
+app.post('/api/aria/session/:id/video/upload', (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Get video data from request
+    // The frontend sends the video as base64 in JSON body
+    const { video_data, file_name } = req.body;
+
+    if (!video_data) {
+      return res.status(400).json({ error: 'No video data provided' });
+    }
+
+    // Convert base64 to buffer
+    const buffer = Buffer.from(video_data, 'base64');
+    const videoFileName = `${sessionId}_interview.webm`;
+    const videoPath = path.join(uploadsDir, videoFileName);
+
+    // Write video file to disk
+    fs.writeFileSync(videoPath, buffer);
+
+    // Calculate file size
+    const stats = fs.statSync(videoPath);
+    const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
+
+    // Store video info in session
+    session.video_url = `/videos/${videoFileName}`;
+    session.video_size_mb = parseFloat(fileSizeMB);
+    session.video_uploaded_at = new Date().toISOString();
+
+    console.log(`✓ Video uploaded for session ${sessionId}: ${fileSizeMB} MB`);
+
+    res.json({
+      success: true,
+      video_url: session.video_url,
+      size_mb: fileSizeMB,
+      uploaded_at: session.video_uploaded_at
+    });
+  } catch (error) {
+    console.error('Video upload error:', error);
+    res.status(500).json({ error: 'Video upload failed: ' + error.message });
+  }
+});
+
+/**
+ * GET /videos/:filename
+ * Serve uploaded videos
+ */
+app.get('/videos/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    // Security: only allow specific filename pattern
+    if (!/^[a-f0-9\-_.]+\.webm$/i.test(filename)) {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
+
+    const filePath = path.join(uploadsDir, filename);
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    // Stream video file
+    const stat = fs.statSync(filePath);
+    res.writeHead(200, {
+      'Content-Type': 'video/webm',
+      'Content-Length': stat.size,
+      'Accept-Ranges': 'bytes'
+    });
+
+    const readStream = fs.createReadStream(filePath);
+    readStream.pipe(res);
+  } catch (error) {
+    console.error('Video retrieval error:', error);
+    res.status(500).json({ error: 'Failed to retrieve video' });
+  }
+});
 
 app.post('/proxy/yarngpt', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
