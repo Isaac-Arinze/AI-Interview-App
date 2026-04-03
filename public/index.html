@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TTS Studio</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0e0e10; --surface: #17171a; --surface2: #1f1f23;
+    --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.13);
+    --text: #f0efed; --muted: #888884;
+    --accent: #c8f06a; --accent-dim: rgba(200,240,106,0.12);
+    --naija: #22c9a0; --naija-dim: rgba(34,201,160,0.12);
+    --danger: #f06a6a; --danger-dim: rgba(240,106,106,0.1);
+    --info: #6ab0f0; --info-dim: rgba(106,176,240,0.1);
+    --success: #6af0a8; --success-dim: rgba(106,240,168,0.1);
+    --radius: 10px; --radius-lg: 16px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; font-weight: 300; min-height: 100vh; display: flex; justify-content: center; padding: 40px 20px 80px; }
+  .wrap { width: 100%; max-width: 640px; }
+  .brand { display: flex; align-items: baseline; gap: 10px; margin-bottom: 36px; flex-wrap: wrap; }
+  .brand-title { font-family: 'Instrument Serif', serif; font-style: italic; font-size: 28px; color: var(--text); letter-spacing: -0.5px; }
+  .brand-badge { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--accent); background: var(--accent-dim); border: 1px solid rgba(200,240,106,0.2); padding: 2px 8px; border-radius: 99px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .naija-pill { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--naija); background: var(--naija-dim); border: 1px solid rgba(34,201,160,0.2); padding: 2px 8px; border-radius: 99px; }
+  .server-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+  .dot.offline { background: var(--danger); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 12px; }
+  .card-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 14px; }
+  .engine-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { flex: 1; min-width: 110px; padding: 9px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 13px; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.15s; text-align: center; }
+  .tab:hover { border-color: var(--border2); color: var(--text); }
+  .tab.active-browser { background: var(--accent-dim); border-color: rgba(200,240,106,0.3); color: var(--accent); font-weight: 500; }
+  .tab.active-naija   { background: var(--naija-dim);  border-color: rgba(34,201,160,0.3);  color: var(--naija);   font-weight: 500; }
+  .tab.active-openai  { background: var(--info-dim);   border-color: rgba(106,176,240,0.3); color: var(--info);    font-weight: 500; }
+  .form-row { display: flex; gap: 10px; margin-bottom: 12px; }
+  .form-group { flex: 1; }
+  .form-group label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text], input[type=password], select, textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 9px 12px; outline: none; transition: border-color 0.15s; -webkit-appearance: none; }
+  input:focus, select:focus, textarea:focus { border-color: var(--border2); }
+  select option { background: #1f1f23; }
+  textarea { height: 130px; resize: vertical; line-height: 1.6; font-size: 14px; }
+  .char-row { display: flex; justify-content: flex-end; margin-top: 6px; margin-bottom: 14px; }
+  .char-count { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+  .speed-row { display: flex; align-items: center; gap: 12px; }
+  input[type=range] { -webkit-appearance: none; flex: 1; height: 3px; background: var(--border2); border-radius: 99px; outline: none; border: none; padding: 0; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .speed-val { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--accent); min-width: 36px; text-align: right; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; padding: 10px 18px; border-radius: var(--radius); font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; transition: all 0.15s; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-speak-browser { background: var(--accent); color: #0e0e10; }
+  .btn-speak-browser:hover:not(:disabled) { background: #d4f57a; }
+  .btn-speak-naija { background: var(--naija); color: #0e0e10; }
+  .btn-speak-naija:hover:not(:disabled) { background: #3de0b5; }
+  .btn-speak-openai { background: var(--info); color: #0e0e10; }
+  .btn-speak-openai:hover:not(:disabled) { background: #88c5f5; }
+  .btn-stop { background: transparent; color: var(--text); border-color: var(--border2); }
+  .btn-stop:hover:not(:disabled) { background: var(--surface2); }
+  .btn-clear { background: transparent; color: var(--muted); border-color: var(--border); }
+  .btn-clear:hover:not(:disabled) { color: var(--text); }
+  .status { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+  .status.loading  { background: var(--info-dim);    color: var(--info);    border: 1px solid rgba(106,176,240,0.15); }
+  .status.success  { background: var(--success-dim); color: var(--success); border: 1px solid rgba(106,240,168,0.15); }
+  .status.error    { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(240,106,106,0.15); }
+  .status.speaking { background: var(--naija-dim);   color: var(--naija);   border: 1px solid rgba(34,201,160,0.15); }
+  .audio-wrap-inner { margin-top: 14px; }
+  audio { width: 100%; border-radius: var(--radius); }
+  .waveform { display: flex; align-items: center; gap: 3px; height: 28px; }
+  .bar { width: 3px; background: var(--naija); border-radius: 99px; animation: wave 0.9s ease-in-out infinite; opacity: 0.7; }
+  .bar:nth-child(2){animation-delay:0.1s}.bar:nth-child(3){animation-delay:0.2s}.bar:nth-child(4){animation-delay:0.3s}.bar:nth-child(5){animation-delay:0.15s}
+  @keyframes wave { 0%,100%{height:4px}50%{height:20px} }
+  .lang-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { font-size: 11px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--border2); color: var(--muted); background: transparent; cursor: pointer; transition: all 0.12s; }
+  .chip.active { border-color: rgba(34,201,160,0.4); color: var(--naija); background: var(--naija-dim); }
+  .note { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 10px; }
+  .hint-card { background: transparent; border: 1px dashed var(--border2); border-radius: var(--radius-lg); padding: 1.25rem 1.5rem; margin-top: 8px; }
+  .hint-card p { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+  /* Interview styles */
+  .interview-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .interview-title { font-size: 13px; font-weight: 500; color: var(--text); }
+  .interview-progress { font-size: 11px; color: var(--muted); }
+  .question-text { font-size: 15px; line-height: 1.7; color: var(--text); margin: 16px 0; padding: 12px; background: var(--surface2); border-left: 3px solid var(--accent); border-radius: var(--radius); }
+  .recording-indicator { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--danger-dim); border: 1px solid rgba(240,106,106,0.2); border-radius: var(--radius); color: var(--danger); font-size: 12px; margin: 12px 0; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .timer { font-family: 'DM Mono', monospace; font-size: 18px; color: var(--accent); margin: 12px 0; text-align: center; }
+  .score-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin: 10px 0; }
+  .score-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .score-value { font-family: 'DM Mono', monospace; font-size: 24px; font-weight: 500; color: var(--accent); margin-top: 4px; }
+  .score-breakdown { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
+  .score-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+  .score-item-label { font-size: 10px; color: var(--muted); }
+  .score-item-value { font-family: 'DM Mono', monospace; font-size: 14px; color: var(--info); margin-top: 3px; }
+  .summary-section { margin-bottom: 16px; }
+  .summary-section h3 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .summary-stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .summary-stat-label { color: var(--muted); }
+  .summary-stat-value { color: var(--text); font-weight: 500; }
+  #browser-panel { display: block; }
+  #naija-panel, #openai-panel, #interview-panel { display: none; }
+  .tab.active-interview { background: rgba(106,176,240,0.12); border-color: rgba(106,176,240,0.3); color: var(--info); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <span class="brand-title">voice studio</span>
+    <span class="brand-badge">AI · TTS</span>
+    <span class="naija-pill">🇳🇬 Naija ready</span>
+  </div>
+
+  <div class="server-status">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">Checking server…</span>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Engine</div>
+    <div class="engine-tabs">
+      <button class="tab active-browser" id="tab-browser" onclick="switchEngine('browser')">Browser (free)</button>
+      <button class="tab" id="tab-naija" onclick="switchEngine('naija')">YarnGPT 🇳🇬</button>
+      <button class="tab" id="tab-openai" onclick="switchEngine('openai')">OpenAI TTS</button>
+      <button class="tab" id="tab-interview" onclick="switchEngine('interview')">🎙️ Interview</button>
+    </div>
+
+    <div id="interview-panel">
+      <div id="interview-init">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Candidate Name</label>
+            <input type="text" id="candidate-name" placeholder="Your name…" value="Candidate"/>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Target Role</label>
+            <select id="candidate-role">
+              <option value="Software Engineer">Software Engineer</option>
+              <option value="Product Manager">Product Manager</option>
+              <option value="Data Analyst">Data Analyst</option>
+              <option value="Marketing">Marketing</option>
+              <option value="Unspecified">Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Language</label>
+            <select id="candidate-lang">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES">Spanish</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-speak-browser" onclick="initInterview()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 2.5L10 6 2 9.5V2.5z"/></svg>
+            Start Interview
+          </button>
+        </div>
+      </div>
+
+      <div id="interview-active" style="display:none;">
+        <div class="interview-header">
+          <div>
+            <div class="interview-title" id="interview-title-name">Candidate Interview</div>
+            <div class="interview-progress" id="interview-progress">Question 1/20</div>
+          </div>
+          <button class="btn btn-stop" onclick="endInterview()">End Interview</button>
+        </div>
+
+        <div class="question-text" id="interview-question">Question will appear here…</div>
+
+        <div id="recording-ui">
+          <div class="actions">
+            <button class="btn btn-speak-browser" id="record-btn" onclick="startRecording()">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="4"/></svg>
+              Start Recording
+            </button>
+            <button class="btn btn-stop" id="stop-record-btn" onclick="stopRecording()" disabled style="display:none;">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="3" y="3" width="6" height="6" rx="1"/></svg>
+              Stop Recording
+            </button>
+            <button class="btn btn-clear" onclick="replayQuestion()">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M6 2v5l3.5 2.1"/></svg>
+              Replay Question
+            </button>
+            <button class="btn btn-clear" id="submit-short-answer-btn" onclick="submitCurrentAnswer()" style="display:none;">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 6.5l3 3 5-5"/></svg>
+              Submit Answer
+            </button>
+          </div>
+          <div class="recording-indicator" id="recording-indicator" style="display:none;">
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="3"/></svg>
+            Recording…
+          </div>
+          <div class="timer" id="recording-timer" style="display:none;">0:00</div>
+          
+          <div id="transcript-input" style="display:none; margin-top: 12px;">
+            <label style="font-size: 11px; color: var(--muted); margin-bottom: 6px; display: block;">Or type your answer:</label>
+            <textarea style="width: 100%; height: 100px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 9px 12px; outline: none;" id="manual-transcript" placeholder="Type your answer here..."></textarea>
+            <div class="actions" style="margin-top: 10px;">
+              <button class="btn btn-speak-browser" onclick="submitManualAnswer()">Submit Answer</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="answer-display" style="display:none; visibility: hidden;">
+          <!-- Scores are hidden during interview, shown only in final summary -->
+        </div>
+
+        <div id="status-wrap"></div>
+      </div>
+
+      <div id="interview-summary" style="display:none;">
+        <div style="margin-bottom: 24px;">
+          <h2 style="font-size: 18px; margin-bottom: 8px;" id="summary-title">Interview Complete!</h2>
+          <p style="color: var(--muted); font-size: 12px;">Your performance summary below</p>
+        </div>
+
+        <div class="score-box" style="margin-bottom: 16px;">
+          <div class="score-label">Overall Performance</div>
+          <div class="score-value" id="summary-overall-score">--</div>
+        </div>
+
+        <div class="summary-section">
+          <h3>Dimension Scores</h3>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Relevance</span>
+            <span class="summary-stat-value" id="summary-relevance">--</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Depth</span>
+            <span class="summary-stat-value" id="summary-depth">--</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Structure</span>
+            <span class="summary-stat-value" id="summary-structure">--</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Communication</span>
+            <span class="summary-stat-value" id="summary-communication">--</span>
+          </div>
+        </div>
+
+        <div class="summary-section">
+          <h3>Interview Stats</h3>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Questions Answered</span>
+            <span class="summary-stat-value" id="summary-answered">0</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Average Duration</span>
+            <span class="summary-stat-value" id="summary-avg-duration">0s</span>
+          </div>
+        </div>
+
+        <div class="actions" style="margin-top: 24px;">
+          <button class="btn btn-speak-browser" onclick="resetInterview()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 2.5L10 6 2 9.5V2.5z"/></svg>
+            Start New Interview
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="browser-panel">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Voice</label>
+          <select id="browser-voice"></select>
+        </div>
+        <div class="form-group">
+          <label>Speed</label>
+          <div class="speed-row">
+            <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1"
+              oninput="document.getElementById('speed-val').textContent=parseFloat(this.value).toFixed(1)+'×'"/>
+            <span class="speed-val" id="speed-val">1.0×</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="naija-panel">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>YarnGPT API key</label>
+        <input type="password" id="naija-key" placeholder="sk_live_…" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Language</label>
+          <select id="naija-lang" onchange="onLangChange(this.value)">
+            <option value="yoruba">Yoruba</option>
+            <option value="igbo">Igbo</option>
+            <option value="hausa">Hausa</option>
+            <option value="pidgin">Nigerian Pidgin</option>
+            <option value="english">Nigerian English</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Voice character</label>
+          <select id="naija-voice">
+            <option value="Idera">Idera — Melodic, gentle</option>
+            <option value="Emma">Emma — Authoritative, deep</option>
+            <option value="Zainab">Zainab — Soothing, gentle</option>
+            <option value="Osagie">Osagie — Smooth, calm</option>
+            <option value="Wura">Wura — Young, sweet</option>
+            <option value="Jude">Jude — Warm, confident</option>
+            <option value="Chinenye">Chinenye — Engaging, warm</option>
+            <option value="Tayo">Tayo — Upbeat, energetic</option>
+            <option value="Regina">Regina — Mature, warm</option>
+            <option value="Femi">Femi — Rich, reassuring</option>
+            <option value="Adaora">Adaora — Warm, engaging</option>
+            <option value="Umar">Umar — Calm, smooth</option>
+            <option value="Mary">Mary — Energetic, youthful</option>
+            <option value="Nonso">Nonso — Bold, resonant</option>
+            <option value="Remi">Remi — Melodious, warm</option>
+            <option value="Adam">Adam — Deep, clear</option>
+          </select>
+        </div>
+      </div>
+      <div class="lang-chips">
+        <span class="chip active" id="chip-yoruba"  onclick="selectLang('yoruba')">Yoruba</span>
+        <span class="chip" id="chip-igbo"           onclick="selectLang('igbo')">Igbo</span>
+        <span class="chip" id="chip-hausa"          onclick="selectLang('hausa')">Hausa</span>
+        <span class="chip" id="chip-pidgin"         onclick="selectLang('pidgin')">Pidgin</span>
+        <span class="chip" id="chip-english"        onclick="selectLang('english')">Naija English</span>
+      </div>
+      <p class="note">Powered by <strong style="color:var(--naija)">YarnGPT</strong> by Saheed Azeez — trained on Nollywood, podcasts &amp; Nigerian audio data.</p>
+    </div>
+
+    <div id="openai-panel">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>OpenAI API key</label>
+        <input type="password" id="api-key" placeholder="sk-…" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Voice</label>
+          <select id="oai-voice">
+            <option value="nova">Nova</option><option value="alloy">Alloy</option>
+            <option value="echo">Echo</option><option value="fable">Fable</option>
+            <option value="onyx">Onyx</option><option value="shimmer">Shimmer</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <select id="oai-model">
+            <option value="tts-1">tts-1 · fast</option>
+            <option value="tts-1-hd">tts-1-hd · high quality</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Text input</div>
+    <textarea id="text-input" placeholder="Type or paste your text here…" oninput="updateCount()">E kaaro! Welcome to your Nigerian AI voice studio. Type any text in Yoruba, Igbo, Hausa, Pidgin, or English and press Speak.</textarea>
+    <div class="char-row"><span class="char-count"><span id="char-count">0</span> / 2000</span></div>
+    <div class="actions">
+      <button class="btn btn-speak-browser" id="speak-btn" onclick="speak()">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 2.5L10 6 2 9.5V2.5z"/></svg>
+        <span id="speak-label">Speak</span>
+      </button>
+      <button class="btn btn-stop" id="stop-btn" onclick="stopAll()" disabled>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1.5"/></svg>
+        Stop
+      </button>
+      <button class="btn btn-clear" onclick="clearAll()">Clear</button>
+    </div>
+    <div id="status-wrap"></div>
+    <div id="audio-wrap"></div>
+  </div>
+
+  <div class="hint-card">
+    <p>Server is running locally on port 3000 — it proxies your API calls to YarnGPT and OpenAI, bypassing browser CORS restrictions.</p>
+  </div>
+
+</div>
+<script>
+  let engine = 'browser';
+  const synth = window.speechSynthesis;
+  const LANGS = ['yoruba','igbo','hausa','pidgin','english'];
+  const PLACEHOLDERS = {
+    yoruba: "Tẹ ọrọ rẹ síbí ní èdè Yorùbá…",
+    igbo: "Dee ozi gị ebe a n'asụsụ Igbo…",
+    hausa: "Rubuta rubutunka a nan cikin Hausa…",
+    pidgin: "Put your text here for Naija Pidgin…",
+    english: "Type your text in Nigerian English…"
+  };
+
+  // Check server is alive
+  async function checkServer() {
+    try {
+      await fetch('/proxy/yarngpt', { method: 'POST', headers: {'Content-Type':'application/json','x-api-key':'test'}, body: JSON.stringify({text:'test',voice:'Idera'}) });
+      setServerStatus(true);
+    } catch(e) {
+      setServerStatus(false);
+    }
+  }
+
+  function setServerStatus(online) {
+    document.getElementById('status-dot').className = 'dot' + (online ? '' : ' offline');
+    document.getElementById('status-text').textContent = online
+      ? 'Server running on localhost:3000'
+      : 'Server offline — run: node server.js';
+  }
+
+  checkServer();
+
+  function switchEngine(e) {
+    engine = e;
+    ['browser','naija','openai','interview'].forEach(id => {
+      document.getElementById('tab-' + id).className = 'tab' + (id === e ? ' active-' + e : '');
+      const panel = document.getElementById(id + '-panel');
+      if (panel) panel.style.display = id === e ? 'block' : 'none';
+    });
+    if (e !== 'interview') {
+      const sb = document.getElementById('speak-btn');
+      sb.className = 'btn btn-speak-' + (e === 'naija' ? 'naija' : e === 'openai' ? 'openai' : 'browser');
+      document.getElementById('speak-label').textContent = e === 'naija' ? 'Yarn am!' : 'Speak';
+      document.getElementById('status-wrap').innerHTML = '';
+      document.getElementById('audio-wrap').innerHTML = '';
+    }
+  }
+
+  function selectLang(lang) {
+    document.getElementById('naija-lang').value = lang;
+    onLangChange(lang);
+  }
+
+  function onLangChange(lang) {
+    LANGS.forEach(l => {
+      const c = document.getElementById('chip-' + l);
+      if (c) c.className = 'chip' + (l === lang ? ' active' : '');
+    });
+    document.getElementById('text-input').placeholder = PLACEHOLDERS[lang] || 'Type your text here…';
+  }
+
+  function updateCount() {
+    document.getElementById('char-count').textContent = document.getElementById('text-input').value.length;
+  }
+
+  function showStatus(msg, type, wave) {
+    const w = wave ? "<div class='waveform'>" + "<div class='bar'></div>".repeat(5) + "</div>" : '';
+    document.getElementById('status-wrap').innerHTML = msg
+      ? `<div class="status ${type}">${w}<span>${msg}</span></div>` : '';
+  }
+
+  function setButtons(active) {
+    document.getElementById('speak-btn').disabled = active;
+    document.getElementById('stop-btn').disabled = !active;
+  }
+
+  function clearAll() {
+    stopAll();
+    document.getElementById('text-input').value = '';
+    updateCount();
+    document.getElementById('audio-wrap').innerHTML = '';
+    document.getElementById('status-wrap').innerHTML = '';
+  }
+
+  function stopAll() {
+    if (synth) synth.cancel();
+    const a = document.querySelector('#audio-wrap audio');
+    if (a) { a.pause(); a.currentTime = 0; }
+    setButtons(false);
+    document.getElementById('status-wrap').innerHTML = '';
+  }
+
+  function speak() {
+    const text = document.getElementById('text-input').value.trim();
+    if (!text) { showStatus('Please enter some text first.', 'error', false); return; }
+    if (engine === 'naija') speakYarnGPT(text);
+    else if (engine === 'openai') speakOpenAI(text);
+    else speakBrowser(text);
+  }
+
+  function speakBrowser(text) {
+    if (!synth) { showStatus('Speech synthesis not supported.', 'error', false); return; }
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const v = synth.getVoices().find(x => x.name === document.getElementById('browser-voice').value);
+    if (v) u.voice = v;
+    u.rate = parseFloat(document.getElementById('speed').value);
+    u.onstart = () => { setButtons(true); showStatus('Speaking…', 'speaking', true); };
+    u.onend   = () => { setButtons(false); showStatus('Done.', 'success', false); };
+    u.onerror = (e) => { setButtons(false); showStatus('Error: ' + e.error, 'error', false); };
+    synth.speak(u);
+  }
+
+  async function speakYarnGPT(text) {
+    const key = document.getElementById('naija-key').value.trim();
+    if (!key) { showStatus('Please enter your YarnGPT API key.', 'error', false); return; }
+    if (text.length > 2000) { showStatus('Max 2000 characters for YarnGPT.', 'error', false); return; }
+    showStatus('Generating Nigerian voice…', 'loading', true);
+    setButtons(true);
+    document.getElementById('audio-wrap').innerHTML = '';
+    try {
+      const res = await fetch('/proxy/yarngpt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ text, voice: document.getElementById('naija-voice').value, response_format: 'mp3' })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || ('HTTP ' + res.status));
+      }
+      const url = URL.createObjectURL(await res.blob());
+      document.getElementById('audio-wrap').innerHTML =
+        `<div class="audio-wrap-inner"><audio controls autoplay src="${url}"></audio></div>`;
+      showStatus('Audio don ready — e don yarn! 🇳🇬', 'success', false);
+      setButtons(false);
+    } catch(e) {
+      showStatus('Error: ' + e.message, 'error', false);
+      setButtons(false);
+    }
+  }
+
+  async function speakOpenAI(text) {
+    const key = document.getElementById('api-key').value.trim();
+    if (!key) { showStatus('Please enter your OpenAI API key.', 'error', false); return; }
+    showStatus('Generating audio…', 'loading', true);
+    setButtons(true);
+    document.getElementById('audio-wrap').innerHTML = '';
+    try {
+      const res = await fetch('/proxy/openai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ model: document.getElementById('oai-model').value, voice: document.getElementById('oai-voice').value, input: text })
+      });
+      if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e?.error || res.statusText); }
+      const url = URL.createObjectURL(await res.blob());
+      document.getElementById('audio-wrap').innerHTML =
+        `<div class="audio-wrap-inner"><audio controls autoplay src="${url}"></audio></div>`;
+      showStatus('Audio ready.', 'success', false);
+      setButtons(false);
+    } catch(e) { showStatus('Error: ' + e.message, 'error', false); setButtons(false); }
+  }
+
+  function loadVoices() {
+    const voices = synth ? synth.getVoices() : [];
+    const sel = document.getElementById('browser-voice');
+    sel.innerHTML = voices.length
+      ? voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join('')
+      : '<option>No voices found</option>';
+  }
+  if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
+  updateCount();
+
+  // ==========================================
+  // ARIA Interview Implementation
+  // ==========================================
+
+  let currentSession = null;
+  let recordingStartTime = null;
+  let recordingTimerInterval = null;
+  let recordingTimeout = null;
+  let currentRecognition = null;  // Keep reference to active recognition
+  
+  // Speech Recognition API
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognitionTranscript = '';
+  let recognitionActive = false;
+
+  async function initInterview() {
+    const name = document.getElementById('candidate-name').value.trim();
+    const role = document.getElementById('candidate-role').value;
+    const language = document.getElementById('candidate-lang').value;
+
+    if (!name) { console.error('Name required'); return; }
+
+    try {
+      showStatus('Initializing interview…', 'loading', true);
+      const res = await fetch('/api/aria/session/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, role, language })
+      });
+
+      if (!res.ok) throw new Error('Failed to init session');
+      const data = await res.json();
+
+      currentSession = {
+        session_id: data.session_id,
+        candidate: data.candidate,
+        current_question: data.current_question,
+        questions: []
+      };
+
+      displayQuestion(data.current_question);
+      document.getElementById('interview-init').style.display = 'none';
+      document.getElementById('interview-active').style.display = 'block';
+      document.getElementById('interview-title-name').textContent = `${name} — ${role}`;
+      document.getElementById('interview-progress').textContent = `Question 1 of 20`;
+      showStatus('', '', false);
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'error', false);
+    }
+  }
+
+  function displayQuestion(question) {
+    document.getElementById('interview-question').textContent = question.text;
+    document.getElementById('recording-ui').style.display = 'block';
+    document.getElementById('answer-display').style.display = 'none';
+    document.getElementById('record-btn').disabled = false;
+    document.getElementById('record-btn').style.display = '';
+    document.getElementById('stop-record-btn').style.display = 'none';
+    
+    // Show clear instruction before speaking
+    showStatus('Listen to the question, then click Start Recording when ready…', 'success', false);
+    
+    // Speak the question after a brief pause
+    setTimeout(() => {
+      speakQuestion(question.text);
+    }, 800);
+  }
+  
+  function speakQuestion(questionText) {
+    if (!synth) return;
+    
+    synth.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(questionText);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    
+    utterance.onend = () => {
+      // After question is spoken, show gentle prompt to start recording
+      setTimeout(() => {
+        showStatus('Ready to record: Click "Start Recording" and speak your answer…', 'info', false);
+      }, 300);
+    };
+    
+    synth.speak(utterance);
+  }
+  
+  function replayQuestion() {
+    const questionText = document.getElementById('interview-question').textContent;
+    speakQuestion(questionText);
+  }
+
+  async function startRecording() {
+    try {
+      if (!SpeechRecognition) {
+        showStatus('Speech recognition not supported. Use text input.', 'error', false);
+        return;
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      currentRecognition = recognition;
+      
+      recordingStartTime = Date.now();
+      recognitionTranscript = '';
+      recognitionActive = true;
+showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
+        
+      recognition.onstart = () => {
+        console.log('✓ Recording started');
+        document.getElementById('record-btn').style.display = 'none';
+        document.getElementById('stop-record-btn').style.display = 'block';
+        document.getElementById('recording-indicator').style.display = 'flex';
+        document.getElementById('recording-timer').style.display = 'block';
+        updateTimer();
+        recordingTimerInterval = setInterval(updateTimer, 100);
+        
+        recordingTimeout = setTimeout(() => {
+          if (recognitionActive) {
+            console.log('Auto-stopping after 60s');
+            recognition.stop();
+          }
+        }, 60000);
+      };
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            recognitionTranscript += event.results[i][0].transcript + ' ';
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech error:', event.error);
+        recognitionActive = false;
+      };
+
+      recognition.onend = async () => {
+        clearTimeout(recordingTimeout);
+        clearInterval(recordingTimerInterval);
+        recognitionActive = false;
+        
+        document.getElementById('record-btn').style.display = 'block';
+        document.getElementById('stop-record-btn').style.display = 'none';
+        document.getElementById('recording-indicator').style.display = 'none';
+        document.getElementById('recording-timer').style.display = 'none';
+        
+        const finalTranscript = recognitionTranscript.trim();
+        if (finalTranscript) {
+          // Warn if answer is very short (likely incomplete)
+          const words = finalTranscript.split(/\s+/).length;
+          if (words < 5) {
+            showStatus('⚠️ Your answer seems brief (' + words + ' words). Provide more detail: Start Recording to re-record, or Stop to submit anyway.', 'error', false);
+            // Don't auto-submit, let user decide
+          } else {
+            await submitAnswer(finalTranscript);
+          }
+        } else {
+          showStatus('⚠️ No speech detected. Click Start Recording to try again.', 'error', false);
+        }
+      };
+
+      recognition.start();
+    } catch (e) {
+      console.error('Error:', e);
+    }
+  }
+  
+  function submitManualAnswer() {
+    const transcript = document.getElementById('manual-transcript').value.trim();
+    if (!transcript) {
+      showStatus('Please type an answer', 'error', false);
+      return;
+    }
+    recognitionTranscript = transcript;
+    stopRecording();
+  }
+
+  function updateTimer() {
+    const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const min = Math.floor(elapsed / 60);
+    const sec = (elapsed % 60).toString().padStart(2, '0');
+    document.getElementById('recording-timer').textContent = `${min}:${sec}`;
+  }
+
+  function stopRecording() {
+    recognitionActive = false;
+    if (currentRecognition) {
+      currentRecognition.stop();
+    }
+    // Check what was recorded and offer feedback
+    const finalTranscript = recognitionTranscript.trim();
+    if (finalTranscript) {
+      const words = finalTranscript.split(/\s+/).length;
+      if (words < 5) {
+        // Show warning and allow re-record or submit anyway
+        showStatus('⚠️ Short answer (' + words + ' words). Re-record to add more detail.', 'error', false);
+        document.getElementById('submit-short-answer-btn').style.display = 'inline-flex';
+      } else {
+        // Good length, auto-submit
+        document.getElementById('submit-short-answer-btn').style.display = 'none';
+        submitAnswer(finalTranscript);
+      }
+    } else {
+      showStatus('No answer recorded. Click Start Recording to try again.', 'error', false);
+    }
+  }
+
+  function submitCurrentAnswer() {
+    const finalTranscript = recognitionTranscript.trim();
+    if (finalTranscript) {
+      document.getElementById('submit-short-answer-btn').style.display = 'none';
+      submitAnswer(finalTranscript);
+    }
+  }
+
+  function resetRecording() {
+    recognitionActive = false;
+    recognitionTranscript = '';
+    clearTimeout(recordingTimeout);
+    clearInterval(recordingTimerInterval);
+    if (currentRecognition) {
+      currentRecognition.stop();
+    }
+    document.getElementById('record-btn').style.display = 'block';
+    document.getElementById('stop-record-btn').style.display = 'none';
+    document.getElementById('recording-indicator').style.display = 'none';
+    document.getElementById('recording-timer').style.display = 'none';
+  }
+
+  async function submitAnswer(transcript) {
+    try {
+      showStatus('Analyzing your answer…', 'loading', true);
+
+      // Audio duration in seconds
+      const duration = Math.floor((Date.now() - recordingStartTime) / 1000);
+
+      const res = await fetch('/api/aria/submit-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSession.session_id,
+          transcript,
+          duration_seconds: duration,
+          confidence: 0.85
+        })
+      });
+
+      if (!res.ok) throw new Error('Failed to submit answer');
+      const evaluation = await res.json();
+
+      displayEvaluation(evaluation);
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'error', false);
+    }
+  }
+
+  function displayEvaluation(evaluation) {
+    const eval_data = evaluation.evaluation;
+    
+    // Store the score for later summary
+    if (!currentSession.scores) {
+      currentSession.scores = [];
+    }
+    currentSession.scores.push({
+      total: eval_data.total,
+      relevance: eval_data.relevance,
+      depth: eval_data.depth,
+      structure: eval_data.structure,
+      communication: eval_data.communication
+    });
+    
+    // Generate personalized feedback based on score
+    let feedback = '';
+    if (eval_data.total >= 80) {
+      feedback = '✓ Excellent answer! Great structure and delivery.';
+    } else if (eval_data.total >= 60) {
+      feedback = '✓ Good response. Strong points across the dimensions.';
+    } else if (eval_data.total >= 40) {
+      feedback = '• Decent answer. Consider adding more specific details next time.';
+    } else {
+      feedback = '• Your answer had some good elements. Try to be more specific with examples.';
+    }
+    
+    showStatus(feedback + ' Score: ' + eval_data.total + '/100', 'success', true);
+    
+    // Auto-advance to next question with better timing
+    if (evaluation.next_action === 'SHOW_SUMMARY') {
+      setTimeout(() => {
+        showStatus('Compiling your final results…', 'loading', true);
+        setTimeout(() => showSummary(), 1200);
+      }, 2000);
+    } else {
+      setTimeout(() => {
+        nextQuestion();
+      }, 2500);
+    }
+  }
+  
+  function speakFeedback(scores, acknowledgment) {
+    if (!synth) return;
+    
+    synth.cancel();
+    
+    // Create comprehensive feedback message
+    const message = `
+      ${acknowledgment}
+      Your overall score is ${scores.total}.
+      Dimension breakdown:
+      Relevance: ${scores.relevance || 'not scored'},
+      Depth: ${scores.depth || 'not scored'},
+      Structure: ${scores.structure || 'not scored'},
+      Communication: ${scores.communication || 'not scored'}.
+    `;
+    
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    
+    utterance.onend = () => {
+      console.log('✓ Feedback spoken');
+    };
+    
+    synth.speak(utterance);
+  }
+
+  async function nextQuestion() {
+    if (currentSession.session_state?.question_index >= 19) {
+      showStatus('Preparing your final summary…', 'loading', true);
+      setTimeout(() => showSummary(), 1200);
+    } else {
+      try {
+        const res = await fetch(`/api/aria/session/${currentSession.session_id}`);
+        if (!res.ok) throw new Error('Session lookup failed');
+        const data = await res.json();
+
+        currentSession.current_question = data.current_question;
+        const qNum = data.question_index + 1;
+        document.getElementById('interview-progress').textContent = `Question ${qNum} of 20`;
+
+        // Brief pause before showing next question
+        document.getElementById('recording-ui').style.display = 'none';
+        showStatus('Next question coming up…', 'loading', true);
+        
+        setTimeout(() => {
+          document.getElementById('recording-ui').style.display = 'block';
+          resetRecording();
+          displayQuestion(data.current_question);
+        }, 1500);
+      } catch (e) {
+        showStatus('Error: ' + e.message, 'error', false);
+      }
+    }
+  }
+
+  async function showSummary() {
+    try {
+      showStatus('Compiling interview results…', 'loading', true);
+      const res = await fetch(`/api/aria/session/${currentSession.session_id}/summary`);
+      if (!res.ok) throw new Error('Summary fetch failed');
+      const data = await res.json();
+
+      const scoring = data.scoring;
+      document.getElementById('summary-overall-score').textContent = Math.round(scoring.avg_score);
+      document.getElementById('summary-relevance').textContent = Math.round(scoring.dimension_averages.relevance);
+      document.getElementById('summary-depth').textContent = Math.round(scoring.dimension_averages.depth);
+      document.getElementById('summary-structure').textContent = Math.round(scoring.dimension_averages.structure);
+      document.getElementById('summary-communication').textContent = Math.round(scoring.dimension_averages.communication);
+      document.getElementById('summary-answered').textContent = data.interview_summary.answered;
+      document.getElementById('summary-avg-duration').textContent = Math.round(scoring.avg_duration) + 's';
+
+      document.getElementById('interview-active').style.display = 'none';
+      document.getElementById('interview-summary').style.display = 'block';
+      showStatus('Interview complete! Your results are ready.', 'success', false);
+      
+      // Speak the final results
+      const finalMessage = `Interview complete. Your overall score is ${Math.round(scoring.avg_score)}. 
+        Relevance: ${Math.round(scoring.dimension_averages.relevance)},
+        Depth: ${Math.round(scoring.dimension_averages.depth)},
+        Structure: ${Math.round(scoring.dimension_averages.structure)},
+        Communication: ${Math.round(scoring.dimension_averages.communication)}.`;
+      
+      if (synth) {
+        synth.cancel();
+        const utterance = new SpeechSynthesisUtterance(finalMessage);
+        utterance.rate = 0.9;
+        synth.speak(utterance);
+      }
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'error', false);
+    }
+  }
+
+  function endInterview() {
+    if (confirm('End interview? Progress will be lost.')) {
+      resetInterview();
+    }
+  }
+
+  function resetInterview() {
+    currentSession = null;
+    recordedChunks = [];
+    if (mediaRecorder) mediaRecorder.stop();
+    document.getElementById('interview-init').style.display = 'block';
+    document.getElementById('interview-active').style.display = 'none';
+    document.getElementById('interview-summary').style.display = 'none';
+    document.getElementById('candidate-name').value = 'Candidate';
+  }
+
+</script>
+</body>
+</html>
