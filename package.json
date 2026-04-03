@@ -1,8 +1,8 @@
 {
   "name": "tts-studio",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "ARIA AI Interview System with speech recognition and TTS",
+  "main": "server.js",
   "scripts": {
     "test": "jest --coverage",
     "test:watch": "jest --watch",
