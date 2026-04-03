@@ -43,16 +43,21 @@ heroku logs --tail
 1. Go to https://render.com
 2. Click "New +" → "Web Service"
 3. Connect your GitHub repository: `https://github.com/Isaac-Arinze/AI-Interview-App.git`
-4. Fill in these settings:
+4. Fill in these settings **EXACTLY**:
    - **Name:** `aria-interview-app`
-   - **Environment:** Node
+   - **Environment:** `Node`
    - **Build command:** `npm install`
-   - **Start command:** `node server.js`
+   - **Start command:** `node server.js` ⚠️ **IMPORTANT: DO NOT USE node index.js**
    - **Plan:** Free (or Paid for guaranteed uptime)
 
-5. Deploy!
+5. Click "Deploy" and wait 2-3 minutes
 
 **Your app will be at:** `https://aria-interview-app.onrender.com` (or similar)
+
+> ⚠️ **Troubleshooting:** If you get "Cannot find module index.js" error:
+> - Go to your Render service settings
+> - Change "Start command" from `node index.js` to `node server.js`
+> - Redeploy via the Render dashboard
 
 > ⚠️ **Note:** Free tier on Render spins down after 15 min inactivity. Paid tier starts at $7/month for always-on.
 
