@@ -1,6 +1,4 @@
-/**
- * Unit Tests for ARIA Question Bank
- */
+
 
 const {
   questionBank,
