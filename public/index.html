@@ -627,13 +627,15 @@
       }
 
       // Request camera permissions
+      // Video-only: a combined video+audio getUserMedia stream grabs the mic and
+      // prevents Web Speech API recognition from receiving input in Chrome (silent / no-speech).
       const constraints = {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: 'user'
         },
-        audio: true
+        audio: false
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -693,16 +695,12 @@
     }
 
     try {
-      // Create MediaRecorder with WebM codec
-      const options = {
-        mimeType: 'video/webm;codecs=vp8,opus'
-      };
-
-      // Fallback if WebM not supported
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        console.warn('WebM codec not supported, using default');
-        options.mimeType = 'video/webm';
+      const hasMicTrack = currentVideoStream.getAudioTracks().length > 0;
+      let mimeType = hasMicTrack ? 'video/webm;codecs=vp8,opus' : 'video/webm;codecs=vp8';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
       }
+      const options = { mimeType };
 
       currentMediaRecorder = new MediaRecorder(currentVideoStream, options);
       videoChunks = [];
@@ -962,55 +960,140 @@
   async function startRecording() {
     try {
       if (!SpeechRecognition) {
-        showStatus('Speech recognition not supported. Use text input.', 'error', false);
+        showStatus('🔊 Speech recognition not supported. Use text input instead.', 'error', false);
         return;
       }
 
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      currentRecognition = recognition;
-      
-      recordingStartTime = Date.now();
+      // Reset state
       recognitionTranscript = '';
       recognitionActive = true;
-showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
+      recordingStartTime = Date.now();
+      
+      let hasDetectedSpeech = false;
+      let recognitionRestarts = 0;
+      const maxRestarts = 4; // Fallback restarts if the engine ends early (e.g. long silence)
+      const maxRecordingTime = 60000; // 60 seconds per question
+      const langSelect = document.getElementById('candidate-lang');
+      const recognitionLang = (langSelect && langSelect.value) ? langSelect.value : 'en-US';
+      
+      const startNewRecognition = () => {
+        if (!recognitionActive) return;
         
-      recognition.onstart = () => {
-        console.log('✓ Recording started');
-        document.getElementById('record-btn').style.display = 'none';
-        document.getElementById('stop-record-btn').style.display = 'block';
-        document.getElementById('recording-indicator').style.display = 'flex';
-        document.getElementById('recording-timer').style.display = 'block';
-        updateTimer();
-        recordingTimerInterval = setInterval(updateTimer, 100);
+        const recognition = new SpeechRecognition();
+        currentRecognition = recognition;
         
-        recordingTimeout = setTimeout(() => {
-          if (recognitionActive) {
-            console.log('Auto-stopping after 60s');
-            recognition.stop();
+        // Continuous session until stop/timeout — avoids rapid onend cycles where some
+        // browsers deliver the last result after "end" (empty transcript + false "no speech").
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = recognitionLang;
+        recognition.maxAlternatives = 1;
+        
+        recognition.onstart = () => {
+          console.log(`✓ Speech recognition started (restart #${recognitionRestarts})`);
+          if (recognitionRestarts === 0) {
+            document.getElementById('record-btn').style.display = 'none';
+            document.getElementById('stop-record-btn').style.display = 'block';
+            document.getElementById('recording-indicator').style.display = 'flex';
+            document.getElementById('recording-timer').style.display = 'block';
+            updateTimer();
+            recordingTimerInterval = setInterval(updateTimer, 100);
+            showStatus('🎤 Listening… Speak your answer (60 seconds max)', 'speaking', false);
           }
-        }, 60000);
-      };
+        };
 
-      recognition.onresult = (event) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            recognitionTranscript += event.results[i][0].transcript + ' ';
+        recognition.onresult = (event) => {
+          let interimTranscript = '';
+          
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            
+            if (event.results[i].isFinal) {
+              recognitionTranscript += transcript + ' ';
+              hasDetectedSpeech = true;
+              console.log(`✓ Final: "${transcript}"`);
+            } else {
+              interimTranscript += transcript;
+              if (transcript.trim()) hasDetectedSpeech = true;
+            }
+          }
+          
+          // Show live feedback
+          const displayText = (recognitionTranscript + ' ' + interimTranscript).trim();
+          if (displayText) {
+            showStatus('🎤 Listening… ' + displayText.substring(0, 120), 'speaking', false);
+          }
+        };
+
+        recognition.onerror = (event) => {
+          if (event.error === 'aborted') {
+            console.log('Recognition aborted (expected during restart)');
+            return;
+          }
+          
+          console.error(`Speech error: ${event.error}`);
+          
+          const errorMessages = {
+            'no-speech': '⚠️ Still waiting for speech… Keep talking!',
+            'audio-capture': '⚠️ Cannot access microphone. Check permissions and try again.',
+            'network': '⚠️ Network error. Please check your internet connection.',
+            'not-allowed': '⚠️ Microphone access denied. Check browser permissions.'
+          };
+          
+          const msg = errorMessages[event.error] || `⚠️ Error: ${event.error}`;
+          showStatus(msg, 'error', false);
+        };
+
+        recognition.onend = () => {
+          // SpeechRecognition may fire "end" before the last "result"; defer decisions so
+          // final transcripts are not dropped (especially when the user clicks Stop).
+          setTimeout(() => {
+            const elapsedMs = Date.now() - recordingStartTime;
+            
+            if (!recognitionActive) {
+              console.log(`Recognition ended by user (${Math.round(elapsedMs/1000)}s elapsed)`);
+              finalizeRecording();
+              return;
+            }
+            
+            console.log(`Recognition ended (attempt #${recognitionRestarts + 1}, ${Math.round(elapsedMs/1000)}s elapsed)`);
+            
+            if (recognitionRestarts < maxRestarts && elapsedMs < maxRecordingTime) {
+              recognitionRestarts++;
+              console.log(`→ Auto-restarting (attempt ${recognitionRestarts + 1}/${maxRestarts + 1})`);
+              setTimeout(() => {
+                if (recognitionActive) {
+                  startNewRecognition();
+                }
+              }, 300);
+            } else {
+              console.log('→ Finalizing (exhausted retries or time limit)');
+              recognitionActive = false;
+              finalizeRecording();
+            }
+          }, 150);
+        };
+
+        try {
+          recognition.start();
+        } catch (err) {
+          console.error('Failed to start recognition:', err);
+          if (recognitionActive) {
+            showStatus('⚠️ Could not start microphone listening. Wait a moment and tap Start Recording again.', 'error', false);
+            recognitionActive = false;
+            document.getElementById('record-btn').style.display = 'block';
+            document.getElementById('stop-record-btn').style.display = 'none';
+            document.getElementById('recording-indicator').style.display = 'none';
+            document.getElementById('recording-timer').style.display = 'none';
+            clearInterval(recordingTimerInterval);
+            clearTimeout(recordingTimeout);
           }
         }
       };
 
-      recognition.onerror = (event) => {
-        console.error('Speech error:', event.error);
-        recognitionActive = false;
-      };
-
-      recognition.onend = async () => {
+      const finalizeRecording = () => {
         clearTimeout(recordingTimeout);
         clearInterval(recordingTimerInterval);
-        recognitionActive = false;
         
         document.getElementById('record-btn').style.display = 'block';
         document.getElementById('stop-record-btn').style.display = 'none';
@@ -1018,23 +1101,58 @@ showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
         document.getElementById('recording-timer').style.display = 'none';
         
         const finalTranscript = recognitionTranscript.trim();
-        if (finalTranscript) {
-          // Warn if answer is very short (likely incomplete)
-          const words = finalTranscript.split(/\s+/).length;
-          if (words < 5) {
-            showStatus('⚠️ Your answer seems brief (' + words + ' words). Provide more detail: Start Recording to re-record, or Stop to submit anyway.', 'error', false);
-            // Don't auto-submit, let user decide
-          } else {
-            await submitAnswer(finalTranscript);
-          }
+        const wordCount = finalTranscript.split(/\s+/).filter(w => w.length > 0).length;
+        
+        console.log(`Final transcript (${wordCount} words): ${finalTranscript.substring(0, 100)}…`);
+        
+        if (wordCount >= 5) {
+          // Good answer - submit it
+          document.getElementById('submit-short-answer-btn').style.display = 'none';
+          submitAnswer(finalTranscript);
+        } else if (wordCount > 0) {
+          // Short answer - give option to continue
+          showStatus(`⚠️ Short answer (${wordCount} words). Click Start Recording to add more detail.`, 'error', false);
+          document.getElementById('submit-short-answer-btn').style.display = 'inline-flex';
+        } else if (hasDetectedSpeech) {
+          // Speech was detected but transcript is empty - wait and retry
+          showStatus('⏳ Processing your answer…', 'loading', false);
+          setTimeout(() => {
+            if (recognitionTranscript.trim()) {
+              submitAnswer(recognitionTranscript.trim());
+            } else {
+              showStatus('⚠️ No text captured from speech. Try again.', 'error', false);
+            }
+          }, 500);
         } else {
-          showStatus('⚠️ No speech detected. Click Start Recording to try again.', 'error', false);
+          // No speech detected at all - check if we ran out of restarts
+          const elapsedMs = Date.now() - recordingStartTime;
+          if (recognitionRestarts >= maxRestarts || elapsedMs >= maxRecordingTime) {
+            showStatus('⚠️ No speech detected after multiple attempts. Check your microphone, enable audio permissions, and try again.', 'error', false);
+          } else {
+            showStatus('⚠️ Waiting for speech… Make sure your microphone is on and permissions are granted.', 'error', false);
+          }
         }
+        
+        recognitionActive = false;
       };
 
-      recognition.start();
+      // Set max recording time (60 seconds per question)
+      recordingTimeout = setTimeout(() => {
+        console.log('⏱️ 1-minute time limit reached - auto-stopping');
+        recognitionActive = false;
+        if (currentRecognition) {
+          try {
+            currentRecognition.stop();
+          } catch (e) {}
+        }
+      }, maxRecordingTime);
+
+      // Start first recognition
+      startNewRecognition();
+      
     } catch (e) {
-      console.error('Error:', e);
+      console.error('Error starting recording:', e);
+      showStatus('⚠️ Error: ' + e.message, 'error', false);
     }
   }
   
@@ -1056,25 +1174,18 @@ showStatus('🎤 Listening… Speak your answer clearly', 'speaking', false);
   }
 
   function stopRecording() {
-    recognitionActive = false;
+    console.log('User clicked Stop Recording');
+    recognitionActive = false;  // This signals onend to process results
+    clearTimeout(recordingTimeout);
+    clearInterval(recordingTimerInterval);
+    
     if (currentRecognition) {
-      currentRecognition.stop();
-    }
-    // Check what was recorded and offer feedback
-    const finalTranscript = recognitionTranscript.trim();
-    if (finalTranscript) {
-      const words = finalTranscript.split(/\s+/).length;
-      if (words < 5) {
-        // Show warning and allow re-record or submit anyway
-        showStatus('⚠️ Short answer (' + words + ' words). Re-record to add more detail.', 'error', false);
-        document.getElementById('submit-short-answer-btn').style.display = 'inline-flex';
-      } else {
-        // Good length, auto-submit
-        document.getElementById('submit-short-answer-btn').style.display = 'none';
-        submitAnswer(finalTranscript);
+      try {
+        currentRecognition.stop();
+        console.log('Recognition stop() called');
+      } catch (err) {
+        console.error('Error stopping recognition:', err);
       }
-    } else {
-      showStatus('No answer recorded. Click Start Recording to try again.', 'error', false);
     }
   }
 

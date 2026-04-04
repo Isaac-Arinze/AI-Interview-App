@@ -2,7 +2,10 @@
  * ARIA Question Bank
  * Stores interview questions organized by phase and role.
  * Supports adaptive selection and role-specific customization.
+ * Phase 4 questions are now dynamically generated based on role.
  */
+
+const DynamicQG = require('./dynamicQuestionGenerator');
 
 const questionBank = {
   phase1_warmup: [
@@ -73,85 +76,11 @@ const questionBank = {
     }
   ],
 
+  // NOTE: phase4_role_specific is now DEPRECATED
+  // Role-specific questions are generated dynamically by DynamicQG.generateRoleSpecificQuestions()
+  // This provides flexibility to generate questions for any role without hardcoding
   phase4_role_specific: {
-    'Software Engineer': [
-      {
-        question_index: 8,
-        text: "Describe your experience with scaling systems. What was the bottleneck, and how did you solve it?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Software Engineer',
-        expected_duration_range: [40, 100]
-      },
-      {
-        question_index: 9,
-        text: "Tell me about a particularly complex bug you debugged. What made it difficult, and how did you solve it?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Software Engineer',
-        expected_duration_range: [35, 90]
-      },
-      {
-        question_index: 10,
-        text: "Walk me through your approach to writing clean, maintainable code. Can you give a specific example?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Software Engineer',
-        expected_duration_range: [35, 90]
-      }
-    ],
-    'Product Manager': [
-      {
-        question_index: 8,
-        text: "Describe a product decision you made that had significant impact. How did you validate it?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Product Manager',
-        expected_duration_range: [40, 100]
-      },
-      {
-        question_index: 9,
-        text: "Walk me through how you would prioritize features when you had conflicting demands from engineering, sales, and customers.",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Product Manager',
-        expected_duration_range: [45, 110]
-      },
-      {
-        question_index: 10,
-        text: "Tell me about a product launch that didn't go as planned. What did you learn, and how did you handle it?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Product Manager',
-        expected_duration_range: [40, 100]
-      }
-    ],
-    'Data Analyst': [
-      {
-        question_index: 8,
-        text: "Describe an analysis you performed that revealed an unexpected insight. How did you discover it and what action did it drive?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Data Analyst',
-        expected_duration_range: [40, 100]
-      },
-      {
-        question_index: 9,
-        text: "Tell me about a time you had to work with messy or incomplete data. How did you handle it?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Data Analyst',
-        expected_duration_range: [35, 90]
-      },
-      {
-        question_index: 10,
-        text: "Walk me through your approach to presenting data findings to non-technical stakeholders. Can you give an example?",
-        phase: 4,
-        type: 'role-specific',
-        role: 'Data Analyst',
-        expected_duration_range: [35, 90]
-      }
-    ]
+    // Kept for backward compatibility only - not used in production
   },
 
   phase5_candidateQA: [
@@ -168,7 +97,7 @@ const questionBank = {
 /**
  * Get all questions for a standard interview
  * @param {string} role - Job title/role for role-specific questions
- * @returns {array} Ordered array of questions
+ * @returns {array} Ordered array of questions (dynamically generated for phase 4)
  */
 function getInterviewQuestions(role = null) {
   const questions = [
@@ -177,15 +106,16 @@ function getInterviewQuestions(role = null) {
     ...questionBank.phase3_situational
   ];
 
-  // Add role-specific questions if role exists
-  if (role && questionBank.phase4_role_specific[role]) {
-    questions.push(...questionBank.phase4_role_specific[role]);
-  } else if (!role) {
+  // Generate role-specific questions dynamically
+  if (role) {
+    const roleSpecificQuestions = DynamicQG.generateRoleSpecificQuestions(role, 8);
+    questions.push(...roleSpecificQuestions);
+  } else {
     // If no role, add extra behavioural question
     if (questionBank.phase2_behavioural.length > 0) {
       const extraBehavioural = {
         ...questionBank.phase2_behavioural[0],
-        question_index: 6,
+        question_index: 8,
         text: "Tell me about a situation where you had to adapt to unexpected changes. How did you handle it?"
       };
       questions.push(extraBehavioural);
@@ -221,17 +151,15 @@ function getTotalQuestionCount(role = null) {
 /**
  * Get questions by phase
  * @param {number} phase - Phase number (1-5)
- * @param {string} role - Job role for phase 4
- * @returns {array} Questions in that phase
+ * @param {string} role - Job role for phase 4 (used for dynamic generation)
+ * @returns {array} Questions in that phase (dynamically generated for phase 4)
  */
 function getQuestionsByPhase(phase, role = null) {
   const phaseMap = {
     1: questionBank.phase1_warmup,
     2: questionBank.phase2_behavioural,
     3: questionBank.phase3_situational,
-    4: role && questionBank.phase4_role_specific[role]
-      ? questionBank.phase4_role_specific[role]
-      : [],
+    4: role ? DynamicQG.generateRoleSpecificQuestions(role, 8) : [],
     5: questionBank.phase5_candidateQA
   };
 
@@ -243,5 +171,10 @@ module.exports = {
   getInterviewQuestions,
   getQuestionByIndex,
   getTotalQuestionCount,
-  getQuestionsByPhase
+  getQuestionsByPhase,
+  // Export dynamic question generation functions
+  getRoleDefinition: DynamicQG.getRoleDefinition,
+  generateRoleSpecificQuestions: DynamicQG.generateRoleSpecificQuestions,
+  generateFollowUpQuestions: DynamicQG.generateFollowUpQuestions,
+  getRoleInsights: DynamicQG.getRoleInsights
 };

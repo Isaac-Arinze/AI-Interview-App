@@ -31,8 +31,13 @@ describe('Question Bank', () => {
     });
 
     test('should have phase 4 role-specific questions', () => {
-      expect(questionBank.phase4_role_specific).toBeTruthy();
-      expect(Object.keys(questionBank.phase4_role_specific).length).toBeGreaterThan(0);
+      // Phase 4 is now dynamically generated based on role
+      // Test that it generates questions for a known role
+      const engineerQuestions = getInterviewQuestions('Software Engineer');
+      const phase4Questions = engineerQuestions.filter(q => q.phase === 4);
+      
+      expect(phase4Questions.length).toBeGreaterThan(0);
+      expect(phase4Questions[0].type).toBe('role-specific');
     });
 
     test('should have phase 5 candidate Q&A', () => {
@@ -271,28 +276,35 @@ describe('Question Bank', () => {
     });
 
     test('should have diverse role options in phase 4', () => {
-      const roles = Object.keys(questionBank.phase4_role_specific);
-      expect(roles.length).toBeGreaterThan(0);
-      expect(roles).toContain('Software Engineer');
+      // Test multiple roles to verify dynamic generation works for different roles
+      const roles = ['Software Engineer', 'Product Manager', 'Data Analyst'];
+      
+      roles.forEach(role => {
+        const questions = getInterviewQuestions(role);
+        const phase4 = questions.filter(q => q.phase === 4);
+        
+        expect(phase4.length).toBeGreaterThan(0);
+        expect(phase4[0].role).toBe(role);
+      });
     });
   });
 
   describe('Edge Cases', () => {
     test('should handle role with no phase 4 questions gracefully', () => {
-      const unknownRole = 'Unknown Role 12345';
+      const unknownRole = 'Blockchain Architect';
       const questions = getInterviewQuestions(unknownRole);
 
       // Should still return other phases
       expect(questions.some(q => q.phase === 1)).toBe(true);
       expect(questions.some(q => q.phase === 2)).toBe(true);
 
-      // Phase 4 should be replaced with extra behavioural
+      // Phase 4 should have dynamically generated role-specific questions
       const phase4 = questions.filter(q => q.phase === 4);
-
-      // If any phase 4, should only be the extra behavioural
-      if (phase4.length > 0) {
-        expect(phase4[0].type).toBe('behavioural');
-      }
+      
+      // Dynamic generation always creates phase 4 for any role
+      expect(phase4.length).toBeGreaterThan(0);
+      expect(phase4[0].type).toBe('role-specific');
+      expect(phase4[0].role).toBe(unknownRole);
     });
 
     test('should maintain unique question indices', () => {
