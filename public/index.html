@@ -42,6 +42,7 @@
   input:focus, select:focus, textarea:focus { border-color: var(--border2); }
   select option { background: #1f1f23; }
   textarea { height: 130px; resize: vertical; line-height: 1.6; font-size: 14px; }
+  #text-input::placeholder { color: var(--muted); opacity: 0.9; }
   .char-row { display: flex; justify-content: flex-end; margin-top: 6px; margin-bottom: 14px; }
   .char-count { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
   .speed-row { display: flex; align-items: center; gap: 12px; }
@@ -400,7 +401,7 @@
 
   <div class="card">
     <div class="card-label">Text input</div>
-    <textarea id="text-input" placeholder="Type or paste your text here…" oninput="updateCount()">E kaaro! Welcome to your Nigerian AI voice studio. Type any text in Yoruba, Igbo, Hausa, Pidgin, or English and press Speak.</textarea>
+    <textarea id="text-input" placeholder="E kaaro! Welcome to your Nigerian AI voice studio. Type any text in Yoruba, Igbo, Hausa, Pidgin, or English and press Speak." oninput="updateCount()"></textarea>
     <div class="char-row"><span class="char-count"><span id="char-count">0</span> / 2000</span></div>
     <div class="actions">
       <button class="btn btn-speak-browser" id="speak-btn" onclick="speak()">
@@ -426,6 +427,7 @@
   let engine = 'browser';
   const synth = window.speechSynthesis;
   const LANGS = ['yoruba','igbo','hausa','pidgin','english'];
+  const WELCOME_PLACEHOLDER = 'E kaaro! Welcome to your Nigerian AI voice studio. Type any text in Yoruba, Igbo, Hausa, Pidgin, or English and press Speak.';
   const PLACEHOLDERS = {
     yoruba: "Tẹ ọrọ rẹ síbí ní èdè Yorùbá…",
     igbo: "Dee ozi gị ebe a n'asụsụ Igbo…",
@@ -467,6 +469,12 @@
       document.getElementById('status-wrap').innerHTML = '';
       document.getElementById('audio-wrap').innerHTML = '';
     }
+    const textInput = document.getElementById('text-input');
+    if (e === 'naija') {
+      onLangChange(document.getElementById('naija-lang').value);
+    } else {
+      textInput.placeholder = WELCOME_PLACEHOLDER;
+    }
   }
 
   function selectLang(lang) {
@@ -479,7 +487,7 @@
       const c = document.getElementById('chip-' + l);
       if (c) c.className = 'chip' + (l === lang ? ' active' : '');
     });
-    document.getElementById('text-input').placeholder = PLACEHOLDERS[lang] || 'Type your text here…';
+    document.getElementById('text-input').placeholder = PLACEHOLDERS[lang] || WELCOME_PLACEHOLDER;
   }
 
   function updateCount() {
