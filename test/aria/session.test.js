@@ -287,6 +287,27 @@ describe('ARIASession', () => {
       expect(summary.per_question[0].scores.total).toBe(100);
       expect(summary.per_question[0].duration_seconds).toBe(30);
     });
+
+    test('should not report negative skipped count when retries add extra answers', () => {
+      session.question_index = 1;
+      session.recordAnswer('retry one', 0.9, 10);
+      session.updateLastAnswerScores({
+        relevance: 10,
+        depth: 10,
+        structure: 10,
+        communication: 10
+      });
+      session.recordAnswer('retry two', 0.9, 12);
+      session.updateLastAnswerScores({
+        relevance: 12,
+        depth: 12,
+        structure: 12,
+        communication: 12
+      });
+
+      const summary = session.getSummary();
+      expect(summary.skipped).toBe(0);
+    });
   });
 
   describe('JSON Serialization', () => {

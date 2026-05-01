@@ -156,6 +156,10 @@
             </select>
           </div>
         </div>
+        <label class="note" style="display:flex;align-items:center;gap:8px;margin:12px 0;cursor:pointer;">
+          <input type="checkbox" id="short-interview" checked />
+          <span>Quick test — only 2 questions, then show final score (full interview uses all questions).</span>
+        </label>
         <div class="actions">
           <button class="btn btn-speak-browser" onclick="initInterview()">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 2.5L10 6 2 9.5V2.5z"/></svg>
@@ -907,10 +911,11 @@
 
     try {
       showStatus('Initializing interview…', 'loading', true);
+      const shortInterview = document.getElementById('short-interview')?.checked === true;
       const res = await fetch('/api/aria/session/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, language })
+        body: JSON.stringify({ name, role, language, short_interview: shortInterview })
       });
 
       if (!res.ok) throw new Error('Failed to init session');
@@ -926,7 +931,8 @@
       document.getElementById('interview-init').style.display = 'none';
       document.getElementById('interview-active').style.display = 'block';
       document.getElementById('interview-title-name').textContent = `${name} — ${role}`;
-      document.getElementById('interview-progress').textContent = `Question 1 of 20`;
+      currentSession.total_questions = data.total_questions || 12;
+      document.getElementById('interview-progress').textContent = `Question 1 of ${currentSession.total_questions}`;
       showStatus('', '', false);
 
       // Initialize camera and video recording (NEW)
@@ -990,6 +996,32 @@
         return;
       }
 
+      // Stop TTS so the question isn't read aloud while the mic is active (avoids echo / engine confusion).
+      if (synth) {
+        try {
+          synth.cancel();
+        } catch (e) {}
+      }
+
+      // Prime microphone permission. Chrome/Edge often fail Web Speech until the page has used getUserMedia once.
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        showStatus('🎤 Enabling microphone… allow access if your browser asks.', 'info', false);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true }
+          });
+          stream.getTracks().forEach((t) => t.stop());
+        } catch (e) {
+          const hint =
+            e.name === 'NotAllowedError'
+              ? 'Click the lock or site icon in the address bar and allow Microphone, then try again.'
+              : e.message || 'Could not open microphone';
+          showStatus('⚠️ Microphone required for voice answers. ' + hint + ' You can also type your answer in the box below.', 'error', false);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 120));
+      }
+
       // Reset state
       recognitionTranscript = '';
       recognitionActive = true;
@@ -997,7 +1029,7 @@
       
       let hasDetectedSpeech = false;
       let recognitionRestarts = 0;
-      const maxRestarts = 4; // Fallback restarts if the engine ends early (e.g. long silence)
+      const maxRestarts = 8; // Fallback restarts if the engine ends early (e.g. long silence / flaky Web Speech)
       const maxRecordingTime = 60000; // 60 seconds per question
       const langSelect = document.getElementById('candidate-lang');
       const recognitionLang = (langSelect && langSelect.value) ? langSelect.value : 'en-US';
@@ -1091,13 +1123,13 @@
                 if (recognitionActive) {
                   startNewRecognition();
                 }
-              }, 300);
+              }, 550);
             } else {
               console.log('→ Finalizing (exhausted retries or time limit)');
               recognitionActive = false;
               finalizeRecording();
             }
-          }, 150);
+          }, 380);
         };
 
         try {
@@ -1153,7 +1185,11 @@
           // No speech detected at all - check if we ran out of restarts
           const elapsedMs = Date.now() - recordingStartTime;
           if (recognitionRestarts >= maxRestarts || elapsedMs >= maxRecordingTime) {
-            showStatus('⚠️ No speech detected after multiple attempts. Check your microphone, enable audio permissions, and try again.', 'error', false);
+            showStatus(
+              '⚠️ No speech detected after multiple attempts. Check your mic in Windows sound settings, allow microphone for this site, and stay online (Chrome/Edge send audio to Google for recognition). Match the interview language to how you speak—or type your answer below.',
+              'error',
+              false
+            );
           } else {
             showStatus('⚠️ Waiting for speech… Make sure your microphone is on and permissions are granted.', 'error', false);
           }
@@ -1335,31 +1371,33 @@
   }
 
   async function nextQuestion() {
-    if (currentSession.session_state?.question_index >= 19) {
-      showStatus('Preparing your final summary…', 'loading', true);
-      setTimeout(() => showSummary(), 1200);
-    } else {
-      try {
-        const res = await fetch(`/api/aria/session/${currentSession.session_id}`);
-        if (!res.ok) throw new Error('Session lookup failed');
-        const data = await res.json();
+    try {
+      const res = await fetch(`/api/aria/session/${currentSession.session_id}`);
+      if (!res.ok) throw new Error('Session lookup failed');
+      const data = await res.json();
 
-        currentSession.current_question = data.current_question;
-        const qNum = data.question_index + 1;
-        document.getElementById('interview-progress').textContent = `Question ${qNum} of 20`;
+      currentSession.current_question = data.current_question;
+      currentSession.total_questions = data.total_questions || currentSession.total_questions || 12;
 
-        // Brief pause before showing next question
-        document.getElementById('recording-ui').style.display = 'none';
-        showStatus('Next question coming up…', 'loading', true);
-        
-        setTimeout(() => {
-          document.getElementById('recording-ui').style.display = 'block';
-          resetRecording();
-          displayQuestion(data.current_question);
-        }, 1500);
-      } catch (e) {
-        showStatus('Error: ' + e.message, 'error', false);
+      if (!data.current_question) {
+        showStatus('Preparing your final summary…', 'loading', true);
+        setTimeout(() => showSummary(), 1200);
+        return;
       }
+
+      const qNum = data.question_index + 1;
+      document.getElementById('interview-progress').textContent = `Question ${qNum} of ${currentSession.total_questions}`;
+
+      document.getElementById('recording-ui').style.display = 'none';
+      showStatus('Next question coming up…', 'loading', true);
+      
+      setTimeout(() => {
+        document.getElementById('recording-ui').style.display = 'block';
+        resetRecording();
+        displayQuestion(data.current_question);
+      }, 1500);
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'error', false);
     }
   }
 
