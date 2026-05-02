@@ -26,3 +26,5 @@ DEPLOYMENT.md
 # Session data
 *.session
 *.cache
+/data/sessions/
+/data/jobs/

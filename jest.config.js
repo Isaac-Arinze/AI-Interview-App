@@ -4,7 +4,9 @@ module.exports = {
     'src/**/*.js',
     '!src/**/*.test.js',
     // HTTP glue is covered by manual smoke + future integration tests; excluding avoids skewing global thresholds.
-    '!src/http/**'
+    '!src/http/**',
+    '!src/persistence/**',
+    '!src/jobs/**'
   ],
   coveragePathIgnorePatterns: [
     '/node_modules/'

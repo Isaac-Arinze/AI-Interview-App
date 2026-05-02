@@ -248,13 +248,6 @@ function getNextStateAfterEvaluation(session, evaluation, totalQuestions) {
     }
   }
 
-  // Check for adaptive follow-up (behavioural questions scoring low)
-  const isPhase2 = session.phase === 2;
-  if (isPhase2 && score < 40) {
-    // Could trigger follow-up here (future enhancement)
-    return 'QUESTION';
-  }
-
   // Check if more questions remaining
   if (session.question_index < totalQuestions - 1) {
     return 'QUESTION';

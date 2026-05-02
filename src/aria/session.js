@@ -26,7 +26,11 @@ class ARIASession {
     this.answers = [];
     this.current_transcript = null;
     this.current_confidence = null;
-    
+    /** Count of adaptive follow-up questions spliced in (ADAPTIVE_FOLLOWUPS). */
+    this.adaptive_followups_used = 0;
+    /** Client proctoring / telemetry events (tab visibility, heartbeats, etc.). */
+    this.proctor_events = [];
+
     // Timestamps
     this.created_at = new Date().toISOString();
     this.expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min TTL
@@ -203,8 +207,56 @@ class ARIASession {
       answers: this.answers,
       created_at: this.created_at,
       expires_at: this.expires_at,
-      last_activity: this.last_activity
+      last_activity: this.last_activity,
+      current_transcript: this.current_transcript,
+      current_confidence: this.current_confidence,
+      questions: this.questions,
+      video_url: this.video_url,
+      video_size_mb: this.video_size_mb,
+      video_uploaded_at: this.video_uploaded_at,
+      adaptive_followups_used: this.adaptive_followups_used,
+      proctor_events: this.proctor_events
     };
+  }
+
+  /**
+   * Restore session from persisted JSON (see toJSON).
+   * @param {object} data
+   * @returns {ARIASession}
+   */
+  static deserialize(data) {
+    if (!data || !data.session_id || !data.candidate) {
+      throw new Error('Invalid session snapshot');
+    }
+    const session = new ARIASession(data.session_id, data.candidate);
+    session.state = data.state != null ? data.state : session.state;
+    session.question_index =
+      data.question_index != null ? data.question_index : session.question_index;
+    session.phase = data.phase != null ? data.phase : session.phase;
+    session.current_retry_count =
+      data.current_retry_count != null ? data.current_retry_count : session.current_retry_count;
+    session.max_retries = data.max_retries != null ? data.max_retries : session.max_retries;
+    session.answers = Array.isArray(data.answers) ? data.answers : [];
+    session.created_at = data.created_at || session.created_at;
+    session.expires_at = data.expires_at || session.expires_at;
+    session.last_activity = data.last_activity || session.last_activity;
+    session.current_transcript =
+      data.current_transcript !== undefined ? data.current_transcript : null;
+    session.current_confidence =
+      data.current_confidence !== undefined ? data.current_confidence : null;
+    if (Array.isArray(data.questions)) {
+      session.questions = data.questions;
+    }
+    if (data.video_url !== undefined) session.video_url = data.video_url;
+    if (data.video_size_mb !== undefined) session.video_size_mb = data.video_size_mb;
+    if (data.video_uploaded_at !== undefined) session.video_uploaded_at = data.video_uploaded_at;
+    if (data.adaptive_followups_used != null) {
+      session.adaptive_followups_used = data.adaptive_followups_used;
+    }
+    if (Array.isArray(data.proctor_events)) {
+      session.proctor_events = data.proctor_events;
+    }
+    return session;
   }
 }
 

@@ -370,6 +370,17 @@
           </div>
         </div>
 
+        <div id="interview-summary-report" class="summary-section" style="display:none;">
+          <h3>AI insights (preview)</h3>
+          <p class="note" id="summary-report-narrative" style="font-size: 13px; color: var(--text); margin-bottom: 10px; line-height: 1.5;"></p>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Recommendation</span>
+            <span class="summary-stat-value" id="summary-report-rec">—</span>
+          </div>
+          <p class="note" id="summary-report-strengths" style="margin-top: 10px; line-height: 1.5;"></p>
+          <p class="note" id="summary-report-gaps" style="margin-top: 6px; line-height: 1.5;"></p>
+        </div>
+
         <div class="actions" style="margin-top: 24px;">
           <button class="btn btn-speak-browser" onclick="resetInterview()">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 2.5L10 6 2 9.5V2.5z"/></svg>
@@ -497,6 +508,7 @@
 </div>
 <script src="liveness-core.js"></script>
 <script src="liveness-fintech.js"></script>
+<script src="interview-api.js"></script>
 <script>
   let engine = 'browser';
   const synth = window.speechSynthesis;
@@ -699,6 +711,7 @@
   // ==========================================
 
   let currentSession = null;
+  let interviewProctorTeardown = null;
   let recordingStartTime = null;
   let recordingTimerInterval = null;
   let recordingTimeout = null;
@@ -708,6 +721,70 @@
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognitionTranscript = '';
   let recognitionActive = false;
+  /** Parallel mic capture for optional server-side Whisper (answer_audio_base64). */
+  let answerAudioStream = null;
+  let answerMediaRecorder = null;
+  let answerAudioChunks = [];
+  let answerAudioMimeType = 'audio/webm';
+  /** When finalize stops short of submit, keep Whisper payload for “Submit anyway”. */
+  let pendingSubmitAudioPayload = null;
+
+  function stopAnswerMediaAndGetBase64() {
+    return new Promise((resolve) => {
+      const cleanupStream = () => {
+        if (answerAudioStream) {
+          answerAudioStream.getTracks().forEach((t) => t.stop());
+          answerAudioStream = null;
+        }
+      };
+
+      if (!answerMediaRecorder) {
+        cleanupStream();
+        resolve(null);
+        return;
+      }
+
+      if (answerMediaRecorder.state === 'inactive') {
+        answerMediaRecorder = null;
+        cleanupStream();
+        resolve(null);
+        return;
+      }
+
+      answerMediaRecorder.onstop = () => {
+        const mime = answerMediaRecorder.mimeType || answerAudioMimeType;
+        answerMediaRecorder = null;
+        const chunks = answerAudioChunks.slice();
+        answerAudioChunks = [];
+        cleanupStream();
+        const blob = new Blob(chunks, { type: mime });
+        if (blob.size < 32) {
+          resolve(null);
+          return;
+        }
+        const fr = new FileReader();
+        fr.onloadend = () => {
+          const dataUrl = fr.result;
+          const b64 =
+            typeof dataUrl === 'string' && dataUrl.includes(',')
+              ? dataUrl.split(',')[1]
+              : null;
+          resolve(b64 ? { base64: b64, mime } : null);
+        };
+        fr.onerror = () => resolve(null);
+        fr.readAsDataURL(blob);
+      };
+
+      try {
+        answerMediaRecorder.stop();
+      } catch (e) {
+        answerMediaRecorder = null;
+        answerAudioChunks = [];
+        cleanupStream();
+        resolve(null);
+      }
+    });
+  }
 
   /**
    * LIVENESS_ALGORITHM (browser-only passive + active checks)
@@ -1243,21 +1320,10 @@
             // Extract base64 data (remove the data:video/webm;base64, prefix)
             const base64data = reader.result.split(',')[1];
 
-            const res = await fetch(`/api/aria/session/${currentSession.session_id}/video/upload`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                video_data: base64data,
-                session_id: currentSession.session_id
-              })
-            });
-
-            if (!res.ok) {
-              const error = await res.text();
-              throw new Error(error || 'Upload failed');
-            }
-
-            const result = await res.json();
+            const result = await window.AriaInterviewApi.uploadSessionVideo(
+              currentSession.session_id,
+              base64data
+            );
             currentSession.video_url = result.video_url;
             console.log('✓ Video uploaded:', result.video_url);
             showStatus('✅ Video uploaded successfully', 'success', false);
@@ -1356,24 +1422,47 @@
     }
   }
 
+  function startProctorTelemetry() {
+    if (!currentSession || !currentSession.session_id || !window.AriaInterviewApi) return null;
+    const sid = currentSession.session_id;
+    const send = (type, detail) => {
+      window.AriaInterviewApi
+        .postProctorEvents(sid, [{ type, ts: new Date().toISOString(), detail: detail || {} }])
+        .catch(function () {});
+    };
+    const onVisibility = function () {
+      send('tab_visibility', { hidden: document.hidden });
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    const intervalId = setInterval(function () {
+      send('heartbeat', {});
+    }, 45000);
+    return function () {
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearInterval(intervalId);
+    };
+  }
+
   async function initInterview() {
     const name = document.getElementById('candidate-name').value.trim();
     const role = document.getElementById('candidate-role').value;
     const language = document.getElementById('candidate-lang').value;
 
     if (!name) { console.error('Name required'); return; }
+    if (!window.AriaInterviewApi) {
+      showStatus('Interview API script missing. Ensure interview-api.js is loaded.', 'error', false);
+      return;
+    }
 
     try {
       showStatus('Initializing interview…', 'loading', true);
       const shortInterview = document.getElementById('short-interview')?.checked === true;
-      const res = await fetch('/api/aria/session/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, language, short_interview: shortInterview })
+      const data = await window.AriaInterviewApi.initSession({
+        name,
+        role,
+        language,
+        short_interview: shortInterview
       });
-
-      if (!res.ok) throw new Error('Failed to init session');
-      const data = await res.json();
 
       currentSession = {
         session_id: data.session_id,
@@ -1394,6 +1483,14 @@
       if (cameraOk) {
         startVideoRecording();
       }
+
+      if (typeof interviewProctorTeardown === 'function') {
+        try {
+          interviewProctorTeardown();
+        } catch (e) {}
+        interviewProctorTeardown = null;
+      }
+      interviewProctorTeardown = startProctorTelemetry();
 
       displayQuestion(data.current_question);
     } catch (e) {
@@ -1461,10 +1558,35 @@
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         showStatus('🎤 Enabling microphone… allow access if your browser asks.', 'info', false);
         try {
+          answerAudioChunks = [];
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true }
           });
-          stream.getTracks().forEach((t) => t.stop());
+          answerAudioStream = stream;
+          if (typeof MediaRecorder !== 'undefined') {
+            const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+            let picked = '';
+            for (const c of candidates) {
+              if (MediaRecorder.isTypeSupported(c)) {
+                picked = c;
+                break;
+              }
+            }
+            if (picked) {
+              answerAudioMimeType = picked;
+              answerMediaRecorder = new MediaRecorder(stream, { mimeType: picked });
+              answerMediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) answerAudioChunks.push(e.data);
+              };
+              answerMediaRecorder.start(4000);
+            } else {
+              stream.getTracks().forEach((t) => t.stop());
+              answerAudioStream = null;
+            }
+          } else {
+            stream.getTracks().forEach((t) => t.stop());
+            answerAudioStream = null;
+          }
         } catch (e) {
           const hint =
             e.name === 'NotAllowedError'
@@ -1478,6 +1600,7 @@
 
       // Reset state
       recognitionTranscript = '';
+      pendingSubmitAudioPayload = null;
       recognitionActive = true;
       recordingStartTime = Date.now();
       
@@ -1559,12 +1682,12 @@
         recognition.onend = () => {
           // SpeechRecognition may fire "end" before the last "result"; defer decisions so
           // final transcripts are not dropped (especially when the user clicks Stop).
-          setTimeout(() => {
+          setTimeout(async () => {
             const elapsedMs = Date.now() - recordingStartTime;
             
             if (!recognitionActive) {
               console.log(`Recognition ended by user (${Math.round(elapsedMs/1000)}s elapsed)`);
-              finalizeRecording();
+              await finalizeRecording();
               return;
             }
             
@@ -1581,7 +1704,7 @@
             } else {
               console.log('→ Finalizing (exhausted retries or time limit)');
               recognitionActive = false;
-              finalizeRecording();
+              await finalizeRecording();
             }
           }, 380);
         };
@@ -1603,7 +1726,7 @@
         }
       };
 
-      const finalizeRecording = () => {
+      const finalizeRecording = async () => {
         clearTimeout(recordingTimeout);
         clearInterval(recordingTimerInterval);
         
@@ -1612,6 +1735,7 @@
         document.getElementById('recording-indicator').style.display = 'none';
         document.getElementById('recording-timer').style.display = 'none';
         
+        const audioPayload = await stopAnswerMediaAndGetBase64();
         const finalTranscript = recognitionTranscript.trim();
         const wordCount = finalTranscript.split(/\s+/).filter(w => w.length > 0).length;
         
@@ -1620,22 +1744,26 @@
         if (wordCount >= 5) {
           // Good answer - submit it
           document.getElementById('submit-short-answer-btn').style.display = 'none';
-          submitAnswer(finalTranscript);
+          pendingSubmitAudioPayload = null;
+          await submitAnswer(finalTranscript, audioPayload);
         } else if (wordCount > 0) {
           // Short answer - give option to continue
+          pendingSubmitAudioPayload = audioPayload;
           showStatus(`⚠️ Short answer (${wordCount} words). Click Start Recording to add more detail.`, 'error', false);
           document.getElementById('submit-short-answer-btn').style.display = 'inline-flex';
         } else if (hasDetectedSpeech) {
           // Speech was detected but transcript is empty - wait and retry
           showStatus('⏳ Processing your answer…', 'loading', false);
-          setTimeout(() => {
+          setTimeout(async () => {
             if (recognitionTranscript.trim()) {
-              submitAnswer(recognitionTranscript.trim());
+              pendingSubmitAudioPayload = null;
+              await submitAnswer(recognitionTranscript.trim(), audioPayload);
             } else {
               showStatus('⚠️ No text captured from speech. Try again.', 'error', false);
             }
           }, 500);
         } else {
+          pendingSubmitAudioPayload = null;
           // No speech detected at all - check if we ran out of restarts
           const elapsedMs = Date.now() - recordingStartTime;
           if (recognitionRestarts >= maxRestarts || elapsedMs >= maxRecordingTime) {
@@ -1672,14 +1800,19 @@
     }
   }
   
-  function submitManualAnswer() {
+  async function submitManualAnswer() {
     const transcript = document.getElementById('manual-transcript').value.trim();
     if (!transcript) {
       showStatus('Please type an answer', 'error', false);
       return;
     }
     recognitionTranscript = transcript;
-    stopRecording();
+    if (currentRecognition) {
+      stopRecording();
+      return;
+    }
+    if (!recordingStartTime) recordingStartTime = Date.now();
+    await submitAnswer(transcript, null);
   }
 
   function updateTimer() {
@@ -1705,21 +1838,52 @@
     }
   }
 
-  function submitCurrentAnswer() {
+  async function submitCurrentAnswer() {
     const finalTranscript = recognitionTranscript.trim();
     if (finalTranscript) {
       document.getElementById('submit-short-answer-btn').style.display = 'none';
-      submitAnswer(finalTranscript);
+      const audio =
+        pendingSubmitAudioPayload || (await stopAnswerMediaAndGetBase64());
+      pendingSubmitAudioPayload = null;
+      await submitAnswer(finalTranscript, audio);
     }
   }
 
   function resetRecording() {
     recognitionActive = false;
     recognitionTranscript = '';
+    pendingSubmitAudioPayload = null;
     clearTimeout(recordingTimeout);
     clearInterval(recordingTimerInterval);
     if (currentRecognition) {
       currentRecognition.stop();
+    }
+    if (answerMediaRecorder && answerMediaRecorder.state !== 'inactive') {
+      answerMediaRecorder.onstop = () => {
+        answerAudioChunks = [];
+        if (answerAudioStream) {
+          answerAudioStream.getTracks().forEach((t) => t.stop());
+          answerAudioStream = null;
+        }
+        answerMediaRecorder = null;
+      };
+      try {
+        answerMediaRecorder.stop();
+      } catch (e) {
+        answerMediaRecorder = null;
+        answerAudioChunks = [];
+        if (answerAudioStream) {
+          answerAudioStream.getTracks().forEach((t) => t.stop());
+          answerAudioStream = null;
+        }
+      }
+    } else {
+      answerAudioChunks = [];
+      if (answerAudioStream) {
+        answerAudioStream.getTracks().forEach((t) => t.stop());
+        answerAudioStream = null;
+      }
+      answerMediaRecorder = null;
     }
     document.getElementById('record-btn').style.display = 'block';
     document.getElementById('stop-record-btn').style.display = 'none';
@@ -1727,26 +1891,25 @@
     document.getElementById('recording-timer').style.display = 'none';
   }
 
-  async function submitAnswer(transcript) {
+  async function submitAnswer(transcript, audioPayload) {
     try {
       showStatus('Analyzing your answer…', 'loading', true);
 
       // Audio duration in seconds
       const duration = Math.floor((Date.now() - recordingStartTime) / 1000);
 
-      const res = await fetch('/api/aria/submit-answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: currentSession.session_id,
-          transcript,
-          duration_seconds: duration,
-          confidence: 0.85
-        })
-      });
+      const payload = {
+        session_id: currentSession.session_id,
+        transcript,
+        duration_seconds: duration,
+        confidence: 0.85
+      };
+      if (audioPayload && audioPayload.base64) {
+        payload.answer_audio_base64 = audioPayload.base64;
+        payload.answer_audio_mime = audioPayload.mime || 'audio/webm';
+      }
 
-      if (!res.ok) throw new Error('Failed to submit answer');
-      const evaluation = await res.json();
+      const evaluation = await window.AriaInterviewApi.submitAnswer(payload);
 
       displayEvaluation(evaluation);
     } catch (e) {
@@ -1780,7 +1943,13 @@
     } else {
       feedback = '• Your answer had some good elements. Try to be more specific with examples.';
     }
-    
+    if (evaluation.adaptive_inserted) {
+      feedback += ' A follow-up question was added next in your interview.';
+    }
+    if (evaluation.transcript_source === 'openai_whisper') {
+      feedback += ' (Answer text from server transcription.)';
+    }
+
     showStatus(feedback + ' Score: ' + eval_data.total + '/100', 'success', true);
     
     // Auto-advance to next question with better timing
@@ -1826,9 +1995,7 @@
 
   async function nextQuestion() {
     try {
-      const res = await fetch(`/api/aria/session/${currentSession.session_id}`);
-      if (!res.ok) throw new Error('Session lookup failed');
-      const data = await res.json();
+      const data = await window.AriaInterviewApi.getSession(currentSession.session_id);
 
       currentSession.current_question = data.current_question;
       currentSession.total_questions = data.total_questions || currentSession.total_questions || 12;
@@ -1857,14 +2024,29 @@
 
   async function showSummary() {
     try {
+      const sidForProctor = currentSession && currentSession.session_id;
+      if (typeof interviewProctorTeardown === 'function') {
+        try {
+          interviewProctorTeardown();
+        } catch (e) {}
+        interviewProctorTeardown = null;
+      }
+      if (sidForProctor && window.AriaInterviewApi) {
+        window.AriaInterviewApi
+          .postProctorEvents(sidForProctor, [
+            { type: 'interview_complete', ts: new Date().toISOString(), detail: {} }
+          ])
+          .catch(function () {});
+      }
+
       // Stop video recording (NEW)
       stopVideoRecording();
       stopCameraStream();
 
       showStatus('Compiling interview results…', 'loading', true);
-      const res = await fetch(`/api/aria/session/${currentSession.session_id}/summary`);
-      if (!res.ok) throw new Error('Summary fetch failed');
-      const data = await res.json();
+      const data = await window.AriaInterviewApi.getSummary(currentSession.session_id, {
+        includeReport: true
+      });
 
       const scoring = data.scoring;
       document.getElementById('summary-overall-score').textContent = Math.round(scoring.avg_score);
@@ -1874,6 +2056,24 @@
       document.getElementById('summary-communication').textContent = Math.round(scoring.dimension_averages.communication);
       document.getElementById('summary-answered').textContent = data.interview_summary.answered;
       document.getElementById('summary-avg-duration').textContent = Math.round(scoring.avg_duration) + 's';
+
+      const reportBox = document.getElementById('interview-summary-report');
+      if (data.report && reportBox) {
+        reportBox.style.display = 'block';
+        document.getElementById('summary-report-narrative').textContent = data.report.narrative || '';
+        const rec = (data.report.recommendation || '').replace(/_/g, ' ');
+        document.getElementById('summary-report-rec').textContent = rec || '—';
+        const st = data.report.strengths && data.report.strengths.length
+          ? '<strong>Strengths:</strong> ' + data.report.strengths.join(' ')
+          : '';
+        const gp = data.report.gaps && data.report.gaps.length
+          ? '<strong>Gaps:</strong> ' + data.report.gaps.join(' ')
+          : '';
+        document.getElementById('summary-report-strengths').innerHTML = st;
+        document.getElementById('summary-report-gaps').innerHTML = gp;
+      } else if (reportBox) {
+        reportBox.style.display = 'none';
+      }
 
       document.getElementById('interview-active').style.display = 'none';
       document.getElementById('interview-summary').style.display = 'block';
@@ -1912,16 +2112,27 @@
   }
 
   function resetInterview() {
+    const sid = currentSession && currentSession.session_id;
+    if (typeof interviewProctorTeardown === 'function') {
+      try {
+        interviewProctorTeardown();
+      } catch (e) {}
+      interviewProctorTeardown = null;
+    }
+    if (sid && window.AriaInterviewApi && typeof window.AriaInterviewApi.deleteSession === 'function') {
+      window.AriaInterviewApi.deleteSession(sid).catch(function () {});
+    }
+
     // Stop video recording and cleanup (NEW)
     stopVideoRecording();
     stopCameraStream();
-    
+
     if (videoBlobURL) {
       URL.revokeObjectURL(videoBlobURL);
       videoBlobURL = null;
     }
     videoChunks = [];
-    
+
     currentSession = null;
     try {
       sessionStorage.removeItem(LivenessCore.LIVENESS_STORAGE_KEY);
@@ -1931,6 +2142,8 @@
     document.getElementById('interview-init').style.display = 'none';
     document.getElementById('interview-active').style.display = 'none';
     document.getElementById('interview-summary').style.display = 'none';
+    const reportBox = document.getElementById('interview-summary-report');
+    if (reportBox) reportBox.style.display = 'none';
     document.getElementById('candidate-name').value = 'Candidate';
   }
 

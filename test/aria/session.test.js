@@ -332,5 +332,27 @@ describe('ARIASession', () => {
       expect(json).toHaveProperty('created_at');
       expect(json).toHaveProperty('expires_at');
     });
+
+    test('toJSON includes proctor_events', () => {
+      session.proctor_events = [{ type: 'heartbeat', ts: '2026-01-01T00:00:00.000Z' }];
+      const json = session.toJSON();
+      expect(json.proctor_events).toHaveLength(1);
+      expect(json.proctor_events[0].type).toBe('heartbeat');
+    });
+
+    test('deserialize round-trips toJSON including questions and video', () => {
+      session.questions = [{ question_index: 0, text: 'Hi?', phase: 1, type: 'warmup' }];
+      session.video_url = '/videos/x.webm';
+      session.video_size_mb = 1.2;
+      session.video_uploaded_at = '2026-01-01T00:00:00.000Z';
+      session.proctor_events = [{ type: 'tab_visibility', ts: '2026-01-02T00:00:00.000Z', detail: { hidden: false } }];
+      const copy = ARIASession.deserialize(session.toJSON());
+      expect(copy.session_id).toBe(session.session_id);
+      expect(copy.questions).toEqual(session.questions);
+      expect(copy.video_url).toBe('/videos/x.webm');
+      expect(copy.video_size_mb).toBe(1.2);
+      expect(copy.video_uploaded_at).toBe('2026-01-01T00:00:00.000Z');
+      expect(copy.proctor_events).toEqual(session.proctor_events);
+    });
   });
 });

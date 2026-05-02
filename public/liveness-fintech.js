@@ -1,9 +1,4 @@
-/**
- * Fintech-style liveness: voice-guided, auto-detected steps, checklist UI.
- * Uses MediaPipe Face Landmarker when available; caller falls back to manual flow on failure.
- *
- * Not a certified KYC product — browser-side heuristics + landmark ML from Google.
- */
+
 (function (global) {
   const MP_VERSION = '0.10.14';
   const WASM_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
@@ -94,49 +89,48 @@
   }
 
   function buildDefaultSteps() {
-    const pool = [
-      {
-        id: 'blink',
-        label: 'Blink your eyes',
-        intro: 'Please blink your eyes slowly two or three times.',
-        success: 'Nice. Blink detected.',
-        detect: (ctx) => {
-          const b = getBlend(ctx.blendCats, 'eyeBlinkLeft', 'eyeBlinkRight');
-          return b > 0.42;
-        }
-      },
-      {
-        id: 'smile',
-        label: 'Smile',
-        intro: 'Please give a clear smile.',
-        success: 'Great. Smile detected.',
-        detect: (ctx) => {
-          return getBlend(ctx.blendCats, 'mouthSmileLeft', 'mouthSmileRight', 'mouthSmile') > 0.38;
-        }
-      },
-      {
-        id: 'turnLeft',
-        label: 'Turn head left',
-        intro: 'Turn your head slowly toward your left shoulder, then back.',
-        success: 'Good. Left turn seen.',
-        detect: (ctx) => {
-          if (ctx.baselineTurnX == null || ctx.nose == null) return false;
-          // Unmirrored video: user’s left → nose tip shifts toward +x
-          return ctx.nose.x > ctx.baselineTurnX + 0.04;
-        }
-      },
-      {
-        id: 'turnRight',
-        label: 'Turn head right',
-        intro: 'Now turn your head slowly toward your right shoulder.',
-        success: 'Perfect. Right turn seen.',
-        detect: (ctx) => {
-          if (ctx.baselineTurnX == null || ctx.nose == null) return false;
-          return ctx.nose.x < ctx.baselineTurnX - 0.04;
-        }
+    const blink = {
+      id: 'blink',
+      label: 'Blink your eyes',
+      intro: 'Please blink your eyes slowly two or three times.',
+      success: 'Nice. Blink detected.',
+      detect: (ctx) => {
+        const b = getBlend(ctx.blendCats, 'eyeBlinkLeft', 'eyeBlinkRight');
+        return b > 0.42;
       }
-    ];
-    const picked = shuffle(pool).slice(0, 3);
+    };
+    const smile = {
+      id: 'smile',
+      label: 'Smile',
+      intro: 'Please give a clear smile.',
+      success: 'Great. Smile detected.',
+      detect: (ctx) => {
+        return getBlend(ctx.blendCats, 'mouthSmileLeft', 'mouthSmileRight', 'mouthSmile') > 0.38;
+      }
+    };
+    const turnLeft = {
+      id: 'turnLeft',
+      label: 'Turn head left',
+      intro: 'Turn your head slowly toward your left shoulder, then back.',
+      success: 'Good. Left turn seen.',
+      detect: (ctx) => {
+        if (ctx.baselineTurnX == null || ctx.nose == null) return false;
+        // Unmirrored video: user’s left → nose tip shifts toward +x
+        return ctx.nose.x > ctx.baselineTurnX + 0.04;
+      }
+    };
+    const turnRight = {
+      id: 'turnRight',
+      label: 'Turn head right',
+      intro: 'Now turn your head slowly toward your right shoulder.',
+      success: 'Perfect. Right turn seen.',
+      detect: (ctx) => {
+        if (ctx.baselineTurnX == null || ctx.nose == null) return false;
+        return ctx.nose.x < ctx.baselineTurnX - 0.04;
+      }
+    };
+    // Always include both head turns, blink, and smile; order shuffled for replay variance.
+    const picked = shuffle([turnLeft, turnRight, blink, smile]);
     const steps = [
       {
         id: 'align',
