@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<coverage generated="1777698305145" clover="3.2.0">
-  <project timestamp="1777698305145" name="All files">
+<coverage generated="1777699259944" clover="3.2.0">
+  <project timestamp="1777699259945" name="All files">
     <metrics statements="258" coveredstatements="239" conditionals="244" coveredconditionals="201" methods="60" coveredmethods="54" elements="562" coveredelements="494" complexity="0" loc="258" ncloc="258" packages="1" files="5" classes="5"/>
     <file name="dynamicQuestionGenerator.js" path="C:\Users\Staff\Downloads\tts-studio\src\aria\dynamicQuestionGenerator.js">
       <metrics statements="34" coveredstatements="23" conditionals="22" coveredconditionals="12" methods="9" coveredmethods="5"/>
