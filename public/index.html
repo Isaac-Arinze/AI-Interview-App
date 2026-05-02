@@ -110,6 +110,21 @@
   .liveness-phrase { font-family: 'DM Mono', monospace; font-size: 18px; color: var(--accent); padding: 10px 14px; background: var(--accent-dim); border-radius: var(--radius); display: inline-block; margin: 8px 0; }
   .liveness-video-wrap { border-radius: var(--radius); overflow: hidden; background: #000; max-height: 220px; margin: 10px 0; }
   .liveness-video-wrap video { width: 100%; display: block; }
+  .liveness-video-shell { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; max-height: 220px; margin: 10px 0; }
+  .liveness-video-shell .liveness-video-wrap { margin: 0; max-height: 220px; }
+  .liveness-ring { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 72%; max-width: 280px; aspect-ratio: 1; border-radius: 50%; border: 3px solid rgba(255,255,255,0.22); pointer-events: none; z-index: 2; transition: border-color 0.2s, box-shadow 0.2s; box-shadow: 0 0 0 9999px rgba(0,0,0,0.42); }
+  .liveness-ring--idle { border-color: rgba(255,255,255,0.22); }
+  .liveness-ring--ok { border-color: rgba(106,240,168,0.95); box-shadow: 0 0 0 9999px rgba(0,0,0,0.38), 0 0 24px rgba(106,240,168,0.25); }
+  .liveness-ring--warn { border-color: rgba(240,106,106,0.95); box-shadow: 0 0 0 9999px rgba(0,0,0,0.38), 0 0 20px rgba(240,106,106,0.2); }
+  .liveness-checklist { list-style: none; margin: 12px 0 8px; padding: 0; }
+  .liveness-check { padding: 10px 12px; font-size: 13px; border-radius: var(--radius); margin-bottom: 6px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); line-height: 1.35; }
+  .liveness-check.done { border-color: rgba(106,240,168,0.45); color: var(--success); background: var(--success-dim); }
+  .liveness-check.active { border-color: rgba(200,240,106,0.45); color: var(--text); background: var(--accent-dim); }
+  .liveness-voice-caption { font-size: 14px; color: var(--text); line-height: 1.45; margin-top: 8px; min-height: 2.8em; }
+  @media (prefers-contrast: more) {
+    .liveness-check { border-width: 2px; }
+    .liveness-ring { border-width: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -140,20 +155,26 @@
       <div id="liveness-gate" class="liveness-wrap" style="display:none;">
         <div class="liveness-title">Verify it’s really you</div>
         <div class="liveness-steps" id="liveness-step-label">Step 1 of 4 · Camera</div>
-        <p class="note" id="liveness-instructions">We’ll use your camera for guided head turns (right, left, straight), then a short spoken or typed phrase. Everything runs in your browser until you start the interview.</p>
+        <p class="note" id="liveness-instructions">We’ll use your camera for automatic presence checks (voice-guided), or manual head poses if your browser cannot load the face engine. Then a short spoken or typed phrase. Everything runs in your browser until you start the interview.</p>
         <div id="liveness-step-1">
           <div class="actions" style="margin-top:12px;">
             <button type="button" class="btn btn-speak-browser" id="liveness-start-camera">Allow camera &amp; continue</button>
           </div>
         </div>
         <div id="liveness-step-2" style="display:none;">
-          <div class="liveness-video-wrap">
-            <video id="liveness-preview" playsinline muted autoplay style="transform: scaleX(-1);"></video>
+          <p class="note" id="liveness-mp-status" style="display:none;"></p>
+          <div class="liveness-video-shell">
+            <div class="liveness-video-wrap">
+              <video id="liveness-preview" playsinline muted autoplay style="transform: scaleX(-1);"></video>
+            </div>
+            <div id="liveness-face-ring" class="liveness-ring liveness-ring--idle" aria-hidden="true"></div>
           </div>
-          <p class="note" id="liveness-pose-progress">Head pose 1 of 3</p>
+          <ul id="liveness-checklist" class="liveness-checklist" aria-live="polite"></ul>
+          <p class="liveness-voice-caption" id="liveness-voice-caption"></p>
+          <p class="note" id="liveness-pose-progress" style="display:none;">Head pose 1 of 3</p>
           <p class="note" id="liveness-motion-hint"></p>
           <div class="actions">
-            <button type="button" class="btn btn-speak-browser" id="liveness-pose-run" disabled>Run pose check</button>
+            <button type="button" class="btn btn-speak-browser" id="liveness-pose-run" disabled style="display:none;">Run pose check</button>
           </div>
         </div>
         <div id="liveness-step-3" style="display:none;">
@@ -475,6 +496,7 @@
 
 </div>
 <script src="liveness-core.js"></script>
+<script src="liveness-fintech.js"></script>
 <script>
   let engine = 'browser';
   const synth = window.speechSynthesis;
@@ -714,6 +736,8 @@
   let livenessPreviewStream = null;
   let livenessChallengePhrase = '';
   let livenessPoseIndex = 0;
+  /** Bumps on reset so in-flight MediaPipe runs do not advance UI after teardown. */
+  let livenessRunId = 0;
 
   const LIVENESS_POSE_SEQUENCE = ['right', 'left', 'straight'];
   const LIVENESS_POSE_COPY = {
@@ -746,6 +770,10 @@
   }
 
   function resetLivenessUI() {
+    livenessRunId += 1;
+    if (window.LivenessFintech && typeof window.LivenessFintech.abort === 'function') {
+      window.LivenessFintech.abort();
+    }
     livenessSetError('');
     document.getElementById('liveness-step-1').style.display = 'block';
     document.getElementById('liveness-step-2').style.display = 'none';
@@ -754,7 +782,24 @@
     if (poseBtn) {
       poseBtn.disabled = true;
       poseBtn.textContent = 'Run pose check';
+      poseBtn.style.display = 'none';
     }
+    const ring = document.getElementById('liveness-face-ring');
+    if (ring) {
+      ring.classList.remove('liveness-ring--warn', 'liveness-ring--ok');
+      ring.classList.add('liveness-ring--idle');
+    }
+    const checklist = document.getElementById('liveness-checklist');
+    if (checklist) checklist.innerHTML = '';
+    const cap = document.getElementById('liveness-voice-caption');
+    if (cap) cap.textContent = '';
+    const mpSt = document.getElementById('liveness-mp-status');
+    if (mpSt) {
+      mpSt.style.display = 'none';
+      mpSt.textContent = '';
+    }
+    const prog = document.getElementById('liveness-pose-progress');
+    if (prog) prog.style.display = 'none';
     livenessPoseIndex = 0;
     const inp = document.getElementById('liveness-phrase-input');
     if (inp) inp.value = '';
@@ -796,6 +841,41 @@
           ? 'Turn left'
           : 'Look straight';
     livenessSetStepLabel(`Step 2 of 4 · ${label}`);
+  }
+
+  function proceedToLivenessPhrase() {
+    if (!LivenessCore) return;
+    livenessChallengePhrase =
+      LivenessCore.LIVENESS_PHRASE_BANK[
+        Math.floor(Math.random() * LivenessCore.LIVENESS_PHRASE_BANK.length)
+      ];
+    document.getElementById('liveness-phrase-display').textContent = livenessChallengePhrase;
+    document.getElementById('liveness-step-2').style.display = 'none';
+    document.getElementById('liveness-step-3').style.display = 'block';
+    livenessSetStepLabel('Step 4 of 4 · Phrase');
+    document.getElementById('liveness-phrase-status').textContent =
+      'Speak the phrase, or type both words and click Verify typed phrase.';
+    const cap = document.getElementById('liveness-voice-caption');
+    if (cap) cap.textContent = '';
+  }
+
+  function showLivenessManualPoseFallback(message) {
+    const status = document.getElementById('liveness-mp-status');
+    if (status) {
+      status.style.display = 'block';
+      status.textContent =
+        message ||
+        'Automatic face check is not available. Use the guided head poses below.';
+    }
+    const prog = document.getElementById('liveness-pose-progress');
+    if (prog) prog.style.display = 'block';
+    const btn = document.getElementById('liveness-pose-run');
+    if (btn) {
+      btn.style.display = '';
+      btn.disabled = false;
+      btn.textContent = 'Run pose check';
+    }
+    setPoseStepUI(0);
   }
 
   /**
@@ -897,6 +977,7 @@
       livenessSetError('Camera is not available in this browser.');
       return;
     }
+    const myRun = livenessRunId;
     try {
       stopLivenessStream();
       livenessPreviewStream = await navigator.mediaDevices.getUserMedia({
@@ -906,11 +987,43 @@
       const vid = document.getElementById('liveness-preview');
       vid.srcObject = livenessPreviewStream;
       await vid.play().catch(() => {});
+      if (myRun !== livenessRunId) return;
       document.getElementById('liveness-step-1').style.display = 'none';
       document.getElementById('liveness-step-2').style.display = 'block';
-      setPoseStepUI(0);
-      document.getElementById('liveness-pose-run').disabled = false;
+      livenessSetStepLabel('Step 2 of 4 · Presence');
+      document.getElementById('liveness-pose-progress').style.display = 'none';
+      document.getElementById('liveness-pose-run').style.display = 'none';
+      const mpSt = document.getElementById('liveness-mp-status');
+      if (mpSt) {
+        mpSt.style.display = 'none';
+        mpSt.textContent = '';
+      }
+      document.getElementById('liveness-motion-hint').textContent = '';
+
+      const LF = window.LivenessFintech;
+      if (!LF || typeof LF.run !== 'function') {
+        showLivenessManualPoseFallback('Face engine script missing. Use manual head poses below.');
+        return;
+      }
+      const result = await LF.run({
+        video: vid,
+        checklistEl: document.getElementById('liveness-checklist'),
+        ringEl: document.getElementById('liveness-face-ring'),
+        captionEl: document.getElementById('liveness-voice-caption'),
+        statusEl: document.getElementById('liveness-mp-status')
+      });
+      if (myRun !== livenessRunId) return;
+      if (result.mode === 'done') {
+        proceedToLivenessPhrase();
+        return;
+      }
+      const err = result.error;
+      if (err && err.message === 'aborted') return;
+      showLivenessManualPoseFallback(
+        err && err.message && err.message !== 'aborted' ? String(err.message) : undefined
+      );
     } catch (err) {
+      if (myRun !== livenessRunId) return;
       livenessSetError(
         err.name === 'NotAllowedError'
           ? 'Camera permission denied. Allow camera for this site and try again.'
@@ -940,16 +1053,7 @@
       setPoseStepUI(livenessPoseIndex);
       return;
     }
-    livenessChallengePhrase =
-      LivenessCore.LIVENESS_PHRASE_BANK[
-        Math.floor(Math.random() * LivenessCore.LIVENESS_PHRASE_BANK.length)
-      ];
-    document.getElementById('liveness-phrase-display').textContent = livenessChallengePhrase;
-    document.getElementById('liveness-step-2').style.display = 'none';
-    document.getElementById('liveness-step-3').style.display = 'block';
-    livenessSetStepLabel('Step 4 of 4 · Phrase');
-    document.getElementById('liveness-phrase-status').textContent =
-      'Speak the phrase, or type both words and click Verify typed phrase.';
+    proceedToLivenessPhrase();
   }
 
   async function onLivenessSpeakVerify() {
