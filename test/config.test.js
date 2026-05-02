@@ -21,4 +21,9 @@ describe('readConfig', () => {
     process.env.USE_DB = '1';
     expect(readConfig().useDb).toBe(true);
   });
+
+  it('accepts TRUST_SERVER_STT=1', () => {
+    process.env.TRUST_SERVER_STT = '1';
+    expect(readConfig().trustServerStt).toBe(true);
+  });
 });

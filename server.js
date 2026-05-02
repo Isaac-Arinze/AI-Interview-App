@@ -4,6 +4,7 @@ const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
 const { readConfig } = require('./src/config');
+const { createSessionStore } = require('./src/persistence/sessionStore');
 const { registerAriaRoutes } = require('./src/http/ariaRoutes');
 
 const app = express();
@@ -20,13 +21,27 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// ARIA session store (in-memory; use Redis/DB in production)
-const sessions = new Map();
-
 const config = readConfig();
-if (config.useDb || config.useQueue || config.adaptiveFollowups) {
+const sessionDataDir = path.join(__dirname, 'data', 'sessions');
+const sessions = createSessionStore({
+  persistToDisk: config.useDb,
+  dataDir: sessionDataDir
+});
+
+if (config.useDb) {
+  console.log(`[config] USE_DB=1 — sessions persist to JSON under ${sessionDataDir}`);
+}
+if (config.adaptiveFollowups) {
+  console.log('[config] ADAPTIVE_FOLLOWUPS=1 — low phase-2 scores may splice a behavioural follow-up question.');
+}
+if (config.trustServerStt) {
   console.log(
-    '[config] Feature flags set (USE_DB / USE_QUEUE / ADAPTIVE_FOLLOWUPS) — handlers not wired yet; behavior unchanged.'
+    '[config] TRUST_SERVER_STT=1 — answer confidence is derived on the server (heuristic until STT is wired).'
+  );
+}
+if (process.env.OPENAI_API_KEY) {
+  console.log(
+    '[config] OPENAI_API_KEY is set — submit-answer can transcribe answer_audio_base64 with Whisper (client still sends browser transcript as fallback).'
   );
 }
 

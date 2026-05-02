@@ -5,10 +5,19 @@
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
+const { enqueue } = require('../jobs/enqueue');
+const { readConfig } = require('../config');
 const ARIASession = require('../aria/session');
 const QuestionBank = require('../aria/questionBank');
 const StateTransitions = require('../aria/stateTransitions');
 const Evaluator = require('../aria/evaluator');
+const { maybeInsertAdaptiveFollowup } = require('../aria/adaptiveFollowup');
+const { deriveConfidenceFromSignals } = require('../aria/answerSignals');
+const { buildInterviewReportStub } = require('../aria/interviewReportStub');
+const {
+  transcribeAnswerAudio,
+  MAX_BASE64_CHARS
+} = require('../aria/sttService');
 
 /**
  * Mount ARIA interview and session-video routes on `app`.
@@ -17,6 +26,12 @@ const Evaluator = require('../aria/evaluator');
  */
 function registerAriaRoutes(app, ctx) {
   const { sessions, uploadsDir } = ctx;
+
+  function persistSession(session) {
+    if (session && typeof sessions.persist === 'function') {
+      sessions.persist(session);
+    }
+  }
 
   async function fetchRoleQuestionsFromAPI(role) {
     const url = process.env.QUESTION_API_URL;
@@ -131,27 +146,66 @@ function registerAriaRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/aria/submit-answer', (req, res) => {
+  app.post('/api/aria/submit-answer', async (req, res) => {
     try {
-      const { session_id, transcript, duration_seconds, confidence } = req.body;
+      const { session_id, duration_seconds, confidence } = req.body;
       if (!session_id || !sessions.has(session_id)) {
         return res.status(404).json({ success: false, error: 'Session not found' });
       }
 
       const session = sessions.get(session_id);
 
-      session.recordAnswer(transcript, parseFloat(confidence), parseFloat(duration_seconds), []);
+      let transcript =
+        typeof req.body.transcript === 'string' ? req.body.transcript.trim() : '';
+      let transcriptSource = 'client';
 
-      const questions =
-        Array.isArray(session.questions) && session.questions.length > 0
-          ? session.questions
-          : QuestionBank.getInterviewQuestions(session.candidate.role);
+      const audioB64 = req.body.answer_audio_base64;
+      const audioMime =
+        typeof req.body.answer_audio_mime === 'string' ? req.body.answer_audio_mime : 'audio/webm';
+      if (
+        process.env.OPENAI_API_KEY &&
+        typeof audioB64 === 'string' &&
+        audioB64.length > 80 &&
+        audioB64.length <= MAX_BASE64_CHARS
+      ) {
+        try {
+          const buf = Buffer.from(audioB64, 'base64');
+          const stt = await transcribeAnswerAudio({ buffer: buf, mimeType: audioMime });
+          if (stt && stt.text) {
+            transcript = stt.text;
+            transcriptSource = stt.source;
+          }
+        } catch (e) {
+          console.warn('[stt] transcribe skipped:', e.message);
+        }
+      }
+
+      const cfg = readConfig();
+      const clientConf = parseFloat(confidence);
+      let effectiveConfidence = Number.isFinite(clientConf) ? clientConf : 0.85;
+      let confidenceSource = 'client';
+      if (cfg.trustServerStt) {
+        const derived = deriveConfidenceFromSignals({
+          transcript,
+          duration_seconds,
+          client_confidence: clientConf
+        });
+        effectiveConfidence = derived.confidence;
+        confidenceSource = derived.source;
+      }
+
+      session.recordAnswer(transcript, effectiveConfidence, parseFloat(duration_seconds), []);
+
+      if (!Array.isArray(session.questions) || session.questions.length === 0) {
+        session.questions = QuestionBank.getInterviewQuestions(session.candidate.role);
+      }
+      const questions = session.questions;
       const currentQuestion = questions[session.question_index];
 
       const evaluation = Evaluator.evaluateAnswer({
         transcript,
         duration_seconds: parseFloat(duration_seconds),
-        confidence: parseFloat(confidence),
+        confidence: effectiveConfidence,
         phase: currentQuestion?.phase || Math.ceil((session.question_index + 1) / 2),
         type: currentQuestion?.type || 'standard'
       });
@@ -162,6 +216,22 @@ function registerAriaRoutes(app, ctx) {
         structure: evaluation.structure,
         communication: evaluation.communication
       });
+
+      const willRetry =
+        evaluation.flag &&
+        ['LOW_CONFIDENCE', 'ANSWER_TOO_SHORT'].includes(evaluation.flag) &&
+        !session.isMaxRetriesExceeded();
+
+      let adaptiveInserted = false;
+      if (!willRetry && cfg.adaptiveFollowups) {
+        adaptiveInserted = maybeInsertAdaptiveFollowup({
+          session,
+          questions,
+          evaluation,
+          currentQuestion,
+          enabled: true
+        }).inserted;
+      }
 
       const nextState = StateTransitions.getNextStateAfterEvaluation(session, evaluation, questions.length);
       const acknowledgment = Evaluator.getAcknowledgmentPhrase(evaluation.total || 50);
@@ -177,11 +247,24 @@ function registerAriaRoutes(app, ctx) {
         nextAction = 'NEXT_QUESTION';
       }
 
+      persistSession(session);
+
+      enqueue('ANSWER_SUBMITTED', {
+        session_id,
+        question_index: session.question_index,
+        next_action: nextAction,
+        score_total: evaluation.total
+      });
+
       res.json({
         success: true,
         evaluation,
         acknowledgment,
         next_action: nextAction,
+        adaptive_inserted: adaptiveInserted,
+        confidence_used: effectiveConfidence,
+        confidence_source: confidenceSource,
+        transcript_source: transcriptSource,
         session_state: {
           question_index: session.question_index,
           current_retry_count: session.current_retry_count,
@@ -200,10 +283,10 @@ function registerAriaRoutes(app, ctx) {
         return res.status(404).json({ success: false, error: 'Session not found' });
       }
 
-      const questions =
-        Array.isArray(session.questions) && session.questions.length > 0
-          ? session.questions
-          : QuestionBank.getInterviewQuestions(session.candidate.role);
+      if (!Array.isArray(session.questions) || session.questions.length === 0) {
+        session.questions = QuestionBank.getInterviewQuestions(session.candidate.role);
+      }
+      const questions = session.questions;
       const currentQuestion = questions[session.question_index] || null;
 
       res.json({
@@ -240,7 +323,7 @@ function registerAriaRoutes(app, ctx) {
       const answers = session.answers;
       const summary = Evaluator.scoreSession(answers);
 
-      res.json({
+      const body = {
         success: true,
         session_id: session.session_id,
         candidate: session.candidate,
@@ -253,6 +336,90 @@ function registerAriaRoutes(app, ctx) {
           confidence: a.confidence,
           scores: a.scores
         }))
+      };
+
+      const wantReport =
+        req.query.include_report === '1' ||
+        req.query.include_report === 'true' ||
+        req.query.enriched === '1';
+      if (wantReport) {
+        body.report = buildInterviewReportStub(session, summary);
+      }
+
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Append client proctoring / telemetry events (non-blocking for the interview UX).
+   * Body: { events: [{ type, ts?, detail? }] } or a single event object with `type`.
+   */
+  app.post('/api/aria/session/:id/events', (req, res) => {
+    try {
+      const session = sessions.get(req.params.id);
+      if (!session) {
+        return res.status(404).json({ success: false, error: 'Session not found' });
+      }
+      if (!Array.isArray(session.proctor_events)) {
+        session.proctor_events = [];
+      }
+      const MAX_EVENTS = 200;
+      const MAX_BATCH = 40;
+      const body = req.body || {};
+      let incoming = [];
+      if (Array.isArray(body.events)) {
+        incoming = body.events;
+      } else if (body && typeof body.type === 'string') {
+        incoming = [body];
+      }
+      let accepted = 0;
+      for (const ev of incoming.slice(0, MAX_BATCH)) {
+        if (!ev || typeof ev.type !== 'string') continue;
+        const type = String(ev.type).slice(0, 64);
+        let detail = ev.detail;
+        if (detail != null && typeof detail === 'object') {
+          try {
+            const s = JSON.stringify(detail);
+            if (s.length > 2000) detail = { _truncated: true };
+          } catch {
+            detail = undefined;
+          }
+        } else {
+          detail = undefined;
+        }
+        session.proctor_events.push({
+          type,
+          ts: typeof ev.ts === 'string' ? ev.ts.slice(0, 40) : new Date().toISOString(),
+          detail
+        });
+        accepted += 1;
+      }
+      if (session.proctor_events.length > MAX_EVENTS) {
+        session.proctor_events = session.proctor_events.slice(-MAX_EVENTS);
+      }
+      persistSession(session);
+      res.json({ success: true, accepted, total: session.proctor_events.length });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /** Last proctor events for dashboards / review (optional). */
+  app.get('/api/aria/session/:id/proctor', (req, res) => {
+    try {
+      const session = sessions.get(req.params.id);
+      if (!session) {
+        return res.status(404).json({ success: false, error: 'Session not found' });
+      }
+      const list = Array.isArray(session.proctor_events) ? session.proctor_events : [];
+      const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+      res.json({
+        success: true,
+        session_id: session.session_id,
+        events: list.slice(-limit),
+        total: list.length
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -296,6 +463,8 @@ function registerAriaRoutes(app, ctx) {
       session.video_uploaded_at = new Date().toISOString();
 
       console.log(`✓ Video uploaded for session ${sessionId}: ${fileSizeMB} MB`);
+
+      persistSession(session);
 
       res.json({
         success: true,
