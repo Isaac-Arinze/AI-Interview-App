@@ -103,6 +103,13 @@
   #browser-panel { display: block; }
   #naija-panel, #openai-panel, #interview-panel { display: none; }
   .tab.active-interview { background: rgba(106,176,240,0.12); border-color: rgba(106,176,240,0.3); color: var(--info); font-weight: 500; }
+  /* Liveness gate */
+  .liveness-wrap { margin-bottom: 14px; padding: 1rem 1.25rem; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+  .liveness-title { font-size: 15px; font-weight: 500; margin-bottom: 8px; color: var(--text); }
+  .liveness-steps { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .liveness-phrase { font-family: 'DM Mono', monospace; font-size: 18px; color: var(--accent); padding: 10px 14px; background: var(--accent-dim); border-radius: var(--radius); display: inline-block; margin: 8px 0; }
+  .liveness-video-wrap { border-radius: var(--radius); overflow: hidden; background: #000; max-height: 220px; margin: 10px 0; }
+  .liveness-video-wrap video { width: 100%; display: block; }
 </style>
 </head>
 <body>
@@ -129,6 +136,43 @@
     </div>
 
     <div id="interview-panel">
+      <!-- Liveness gate: must pass before interview setup (see LIVENESS_ALGORITHM in script) -->
+      <div id="liveness-gate" class="liveness-wrap" style="display:none;">
+        <div class="liveness-title">Verify it’s really you</div>
+        <div class="liveness-steps" id="liveness-step-label">Step 1 of 3 · Camera</div>
+        <p class="note" id="liveness-instructions">We’ll use your camera for a few seconds, then ask you to move slightly and say a short phrase. Data stays in your browser until you start the interview.</p>
+        <div id="liveness-step-1">
+          <div class="actions" style="margin-top:12px;">
+            <button type="button" class="btn btn-speak-browser" id="liveness-start-camera">Allow camera &amp; continue</button>
+          </div>
+        </div>
+        <div id="liveness-step-2" style="display:none;">
+          <div class="liveness-video-wrap">
+            <video id="liveness-preview" playsinline muted autoplay></video>
+          </div>
+          <p class="note" id="liveness-motion-hint">Gently move: nod, lean side to side, or step back slightly for about 3 seconds.</p>
+          <div class="actions">
+            <button type="button" class="btn btn-speak-browser" id="liveness-start-motion" disabled>Start motion check</button>
+          </div>
+        </div>
+        <div id="liveness-step-3" style="display:none;">
+          <p class="note">Say this phrase clearly (or type it below if speech is unavailable):</p>
+          <div class="liveness-phrase" id="liveness-phrase-display"></div>
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-group">
+              <label>Type phrase to verify</label>
+              <input type="text" id="liveness-phrase-input" autocomplete="off" placeholder="Type the two words…" />
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="btn btn-speak-browser" id="liveness-speak-verify">I’m speaking the phrase</button>
+            <button type="button" class="btn btn-clear" id="liveness-type-verify">Verify typed phrase</button>
+          </div>
+          <p class="note" id="liveness-phrase-status" style="margin-top:8px;"></p>
+        </div>
+        <p class="note" id="liveness-error" style="color:var(--danger);display:none;margin-top:10px;"></p>
+      </div>
+
       <div id="interview-init">
         <div class="form-row">
           <div class="form-group">
@@ -429,6 +473,7 @@
   </div>
 
 </div>
+<script src="liveness-core.js"></script>
 <script>
   let engine = 'browser';
   const synth = window.speechSynthesis;
@@ -496,6 +541,9 @@
       onLangChange(document.getElementById('naija-lang').value);
     } else {
       textInput.placeholder = WELCOME_PLACEHOLDER;
+    }
+    if (e === 'interview') {
+      routeInterviewEntry();
     }
   }
 
@@ -637,6 +685,258 @@
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognitionTranscript = '';
   let recognitionActive = false;
+
+  /**
+   * LIVENESS_ALGORITHM (browser-only passive + active checks)
+   *
+   * Goal: reduce simple replay/static-image spoofing before interview setup.
+   * This is not a certified biometric product; it is a structured gate for demos.
+   *
+   * S0 — Entry: user opens Interview tab; if session flag missing, show gate.
+   * S1 — Stream acquisition: getUserMedia({ video: user }) → prove camera works.
+   * S2 — Passive motion: sample downscaled frames ~220ms apart for ~3.5s.
+   *       Compute per-interval mean absolute RGB delta (subsampled pixels).
+   *       PASS if (spike_count >= 3) OR (stdev(deltas) >= 0.85) → enough change vs. static print.
+   * S3 — Active phrase: random two-word phrase; user speaks (Web Speech) OR types exact tokens.
+   *       PASS if normalized transcript contains both words (order-independent).
+   * S4 — Commit: stop tracks; sessionStorage['aria_liveness_passed_v1']='1'; reveal interview-init.
+   *
+   * Failures: show error; user retries from S1. End interview clears flag (re-verify next run).
+   */
+  const LivenessCore = window.LivenessCore;
+  if (!LivenessCore) {
+    console.error('liveness-core.js failed to load');
+  }
+  let livenessPreviewStream = null;
+  let livenessChallengePhrase = '';
+
+  function stopLivenessStream() {
+    if (livenessPreviewStream) {
+      livenessPreviewStream.getTracks().forEach((t) => t.stop());
+      livenessPreviewStream = null;
+    }
+    const pv = document.getElementById('liveness-preview');
+    if (pv) pv.srcObject = null;
+  }
+
+  function livenessSetError(msg) {
+    const el = document.getElementById('liveness-error');
+    if (!el) return;
+    el.style.display = msg ? 'block' : 'none';
+    el.textContent = msg || '';
+  }
+
+  function livenessSetStepLabel(text) {
+    const el = document.getElementById('liveness-step-label');
+    if (el) el.textContent = text;
+  }
+
+  function resetLivenessUI() {
+    livenessSetError('');
+    document.getElementById('liveness-step-1').style.display = 'block';
+    document.getElementById('liveness-step-2').style.display = 'none';
+    document.getElementById('liveness-step-3').style.display = 'none';
+    const motionBtn = document.getElementById('liveness-start-motion');
+    if (motionBtn) {
+      motionBtn.disabled = true;
+      motionBtn.textContent = 'Start motion check';
+    }
+    const inp = document.getElementById('liveness-phrase-input');
+    if (inp) inp.value = '';
+    const st = document.getElementById('liveness-phrase-status');
+    if (st) st.textContent = '';
+    stopLivenessStream();
+  }
+
+  function routeInterviewEntry() {
+    const gate = document.getElementById('liveness-gate');
+    const init = document.getElementById('interview-init');
+    if (!gate || !init) return;
+    const ok = sessionStorage.getItem(LivenessCore.LIVENESS_STORAGE_KEY) === '1';
+    gate.style.display = ok ? 'none' : 'block';
+    init.style.display = ok ? 'block' : 'none';
+    if (!ok) resetLivenessUI();
+  }
+
+  function completeLivenessGate() {
+    stopLivenessStream();
+    sessionStorage.setItem(LivenessCore.LIVENESS_STORAGE_KEY, '1');
+    document.getElementById('liveness-gate').style.display = 'none';
+    document.getElementById('interview-init').style.display = 'block';
+  }
+
+  async function runLivenessMotionCheck(video) {
+    if (!LivenessCore) return false;
+    const w = 72;
+    const h = 56;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const diffs = [];
+    let prev = null;
+    const totalMs = 3500;
+    const tick = 220;
+    const t0 = Date.now();
+    while (Date.now() - t0 < totalMs) {
+      await new Promise((r) => setTimeout(r, tick));
+      if (!video.videoWidth) continue;
+      ctx.drawImage(video, 0, 0, w, h);
+      const cur = ctx.getImageData(0, 0, w, h).data;
+      if (prev) {
+        let s = 0;
+        for (let i = 0; i < cur.length; i += 20) {
+          s +=
+            Math.abs(cur[i] - prev[i]) +
+            Math.abs(cur[i + 1] - prev[i + 1]) +
+            Math.abs(cur[i + 2] - prev[i + 2]);
+        }
+        const denom = (cur.length / 20) * 3;
+        const norm = s / denom;
+        diffs.push(norm);
+      }
+      prev = new Uint8Array(cur);
+    }
+    return LivenessCore.motionPassFromDiffNorms(diffs);
+  }
+
+  function verifyLivenessPhraseText(spokenOrTyped) {
+    if (!LivenessCore) return false;
+    return LivenessCore.verifyLivenessPhraseText(livenessChallengePhrase, spokenOrTyped);
+  }
+
+  async function listenOnceForPhrase(timeoutMs) {
+    if (!SpeechRecognition) return '';
+    return new Promise((resolve) => {
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = 'en-US';
+      let done = false;
+      const finish = (txt) => {
+        if (done) return;
+        done = true;
+        try {
+          rec.stop();
+        } catch (e) {}
+        resolve(txt || '');
+      };
+      const timer = setTimeout(() => finish(''), timeoutMs);
+      rec.onresult = (e) => {
+        let t = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          t += e.results[i][0].transcript;
+        }
+        clearTimeout(timer);
+        finish(t);
+      };
+      rec.onerror = () => {
+        clearTimeout(timer);
+        finish('');
+      };
+      rec.onend = () => {
+        clearTimeout(timer);
+        setTimeout(() => finish(''), 80);
+      };
+      try {
+        rec.start();
+      } catch (e) {
+        clearTimeout(timer);
+        finish('');
+      }
+    });
+  }
+
+  async function onLivenessAllowCamera() {
+    livenessSetError('');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      livenessSetError('Camera is not available in this browser.');
+      return;
+    }
+    try {
+      stopLivenessStream();
+      livenessPreviewStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false
+      });
+      const vid = document.getElementById('liveness-preview');
+      vid.srcObject = livenessPreviewStream;
+      await vid.play().catch(() => {});
+      document.getElementById('liveness-step-1').style.display = 'none';
+      document.getElementById('liveness-step-2').style.display = 'block';
+      livenessSetStepLabel('Step 2 of 3 · Motion');
+      document.getElementById('liveness-start-motion').disabled = false;
+    } catch (err) {
+      livenessSetError(
+        err.name === 'NotAllowedError'
+          ? 'Camera permission denied. Allow camera for this site and try again.'
+          : 'Could not open camera: ' + (err.message || err.name)
+      );
+    }
+  }
+
+  async function onLivenessStartMotion() {
+    const btn = document.getElementById('liveness-start-motion');
+    const vid = document.getElementById('liveness-preview');
+    livenessSetError('');
+    btn.disabled = true;
+    btn.textContent = 'Checking motion…';
+    const ok = await runLivenessMotionCheck(vid);
+    btn.textContent = 'Start motion check';
+    btn.disabled = false;
+    if (!ok) {
+      livenessSetError(
+        'We did not detect enough movement. Ensure your face is visible and move gently, then try again.'
+      );
+      return;
+    }
+    livenessChallengePhrase =
+      LivenessCore.LIVENESS_PHRASE_BANK[
+        Math.floor(Math.random() * LivenessCore.LIVENESS_PHRASE_BANK.length)
+      ];
+    document.getElementById('liveness-phrase-display').textContent = livenessChallengePhrase;
+    document.getElementById('liveness-step-2').style.display = 'none';
+    document.getElementById('liveness-step-3').style.display = 'block';
+    livenessSetStepLabel('Step 3 of 3 · Phrase');
+    document.getElementById('liveness-phrase-status').textContent =
+      'Speak the phrase, or type both words and click Verify typed phrase.';
+  }
+
+  async function onLivenessSpeakVerify() {
+    const status = document.getElementById('liveness-phrase-status');
+    status.textContent = 'Listening…';
+    const text = await listenOnceForPhrase(14000);
+    if (verifyLivenessPhraseText(text)) {
+      status.textContent = 'Phrase verified.';
+      completeLivenessGate();
+      return;
+    }
+    status.textContent =
+      'Could not match phrase from speech. Type both words below and use “Verify typed phrase”, or try again.';
+  }
+
+  function onLivenessTypeVerify() {
+    const status = document.getElementById('liveness-phrase-status');
+    const raw = document.getElementById('liveness-phrase-input').value;
+    if (verifyLivenessPhraseText(raw)) {
+      status.textContent = 'Phrase verified.';
+      completeLivenessGate();
+    } else {
+      status.textContent = 'Words do not match. Check spelling and both words from the phrase.';
+    }
+  }
+
+  function setupLivenessGateListeners() {
+    const a = document.getElementById('liveness-start-camera');
+    const b = document.getElementById('liveness-start-motion');
+    const c = document.getElementById('liveness-speak-verify');
+    const d = document.getElementById('liveness-type-verify');
+    if (a) a.addEventListener('click', onLivenessAllowCamera);
+    if (b) b.addEventListener('click', onLivenessStartMotion);
+    if (c) c.addEventListener('click', onLivenessSpeakVerify);
+    if (d) d.addEventListener('click', onLivenessTypeVerify);
+  }
+  setupLivenessGateListeners();
 
   // ===== VIDEO RECORDING VARIABLES (NEW) =====
   let currentVideoStream = null;
@@ -1469,7 +1769,12 @@
     videoChunks = [];
     
     currentSession = null;
-    document.getElementById('interview-init').style.display = 'block';
+    try {
+      sessionStorage.removeItem(LivenessCore.LIVENESS_STORAGE_KEY);
+    } catch (e) {}
+    resetLivenessUI();
+    document.getElementById('liveness-gate').style.display = 'block';
+    document.getElementById('interview-init').style.display = 'none';
     document.getElementById('interview-active').style.display = 'none';
     document.getElementById('interview-summary').style.display = 'none';
     document.getElementById('candidate-name').value = 'Candidate';
