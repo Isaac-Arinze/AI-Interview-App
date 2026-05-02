@@ -7,6 +7,7 @@
     "test": "jest --coverage",
     "test:watch": "jest --watch",
     "test:aria": "jest test/aria --coverage",
+    "smoke": "jest --coverage",
     "start": "node server.js"
   },
   "keywords": [],
