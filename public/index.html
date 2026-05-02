@@ -139,8 +139,8 @@
       <!-- Liveness gate: must pass before interview setup (see LIVENESS_ALGORITHM in script) -->
       <div id="liveness-gate" class="liveness-wrap" style="display:none;">
         <div class="liveness-title">Verify it’s really you</div>
-        <div class="liveness-steps" id="liveness-step-label">Step 1 of 3 · Camera</div>
-        <p class="note" id="liveness-instructions">We’ll use your camera for a few seconds, then ask you to move slightly and say a short phrase. Data stays in your browser until you start the interview.</p>
+        <div class="liveness-steps" id="liveness-step-label">Step 1 of 4 · Camera</div>
+        <p class="note" id="liveness-instructions">We’ll use your camera for guided head turns (right, left, straight), then a short spoken or typed phrase. Everything runs in your browser until you start the interview.</p>
         <div id="liveness-step-1">
           <div class="actions" style="margin-top:12px;">
             <button type="button" class="btn btn-speak-browser" id="liveness-start-camera">Allow camera &amp; continue</button>
@@ -148,11 +148,12 @@
         </div>
         <div id="liveness-step-2" style="display:none;">
           <div class="liveness-video-wrap">
-            <video id="liveness-preview" playsinline muted autoplay></video>
+            <video id="liveness-preview" playsinline muted autoplay style="transform: scaleX(-1);"></video>
           </div>
-          <p class="note" id="liveness-motion-hint">Gently move: nod, lean side to side, or step back slightly for about 3 seconds.</p>
+          <p class="note" id="liveness-pose-progress">Head pose 1 of 3</p>
+          <p class="note" id="liveness-motion-hint"></p>
           <div class="actions">
-            <button type="button" class="btn btn-speak-browser" id="liveness-start-motion" disabled>Start motion check</button>
+            <button type="button" class="btn btn-speak-browser" id="liveness-pose-run" disabled>Run pose check</button>
           </div>
         </div>
         <div id="liveness-step-3" style="display:none;">
@@ -694,9 +695,12 @@
    *
    * S0 — Entry: user opens Interview tab; if session flag missing, show gate.
    * S1 — Stream acquisition: getUserMedia({ video: user }) → prove camera works.
-   * S2 — Passive motion: sample downscaled frames ~220ms apart for ~3.5s.
-   *       Compute per-interval mean absolute RGB delta (subsampled pixels).
-   *       PASS if (spike_count >= 3) OR (stdev(deltas) >= 0.85) → enough change vs. static print.
+   * S2 — Guided pose (mirrored video, same convention as preview):
+   *       (a) Turn right — centroid x increases enough vs. start (user’s right).
+   *       (b) Turn left — centroid x decreases enough.
+   *       (c) Look straight — centroid near center, low variance (steady).
+   *       Each segment ~3.4s @ 200ms: mirrored draw → brightness-weighted centroid + frame diffs.
+   *       PASS pose AND motionLiveEnoughForPose(diffs) for that segment.
    * S3 — Active phrase: random two-word phrase; user speaks (Web Speech) OR types exact tokens.
    *       PASS if normalized transcript contains both words (order-independent).
    * S4 — Commit: stop tracks; sessionStorage['aria_liveness_passed_v1']='1'; reveal interview-init.
@@ -709,6 +713,16 @@
   }
   let livenessPreviewStream = null;
   let livenessChallengePhrase = '';
+  let livenessPoseIndex = 0;
+
+  const LIVENESS_POSE_SEQUENCE = ['right', 'left', 'straight'];
+  const LIVENESS_POSE_COPY = {
+    right:
+      'Slowly turn your head toward your right shoulder and hold for a moment while we record.',
+    left: 'Now turn your head toward your left shoulder and hold briefly.',
+    straight:
+      'Face the camera straight on — eyes toward the lens — and hold still for a moment.'
+  };
 
   function stopLivenessStream() {
     if (livenessPreviewStream) {
@@ -736,11 +750,12 @@
     document.getElementById('liveness-step-1').style.display = 'block';
     document.getElementById('liveness-step-2').style.display = 'none';
     document.getElementById('liveness-step-3').style.display = 'none';
-    const motionBtn = document.getElementById('liveness-start-motion');
-    if (motionBtn) {
-      motionBtn.disabled = true;
-      motionBtn.textContent = 'Start motion check';
+    const poseBtn = document.getElementById('liveness-pose-run');
+    if (poseBtn) {
+      poseBtn.disabled = true;
+      poseBtn.textContent = 'Run pose check';
     }
+    livenessPoseIndex = 0;
     const inp = document.getElementById('liveness-phrase-input');
     if (inp) inp.value = '';
     const st = document.getElementById('liveness-phrase-status');
@@ -765,39 +780,68 @@
     document.getElementById('interview-init').style.display = 'block';
   }
 
-  async function runLivenessMotionCheck(video) {
+  function setPoseStepUI(i) {
+    livenessPoseIndex = i;
+    const dir = LIVENESS_POSE_SEQUENCE[i];
+    const hint = document.getElementById('liveness-motion-hint');
+    const prog = document.getElementById('liveness-pose-progress');
+    if (hint) hint.textContent = LIVENESS_POSE_COPY[dir] || '';
+    if (prog) {
+      prog.textContent = `Head pose ${i + 1} of ${LIVENESS_POSE_SEQUENCE.length}`;
+    }
+    const label =
+      dir === 'right'
+        ? 'Turn right'
+        : dir === 'left'
+          ? 'Turn left'
+          : 'Look straight';
+    livenessSetStepLabel(`Step 2 of 4 · ${label}`);
+  }
+
+  /**
+   * Samples mirrored video (same as preview) and evaluates pose + light motion.
+   */
+  async function runPoseSegment(video, direction) {
     if (!LivenessCore) return false;
-    const w = 72;
-    const h = 56;
+    const w = 80;
+    const h = 62;
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const cxSamples = [];
     const diffs = [];
-    let prev = null;
-    const totalMs = 3500;
-    const tick = 220;
+    let prevData = null;
+    const totalMs = 3400;
+    const tick = 200;
     const t0 = Date.now();
     while (Date.now() - t0 < totalMs) {
       await new Promise((r) => setTimeout(r, tick));
       if (!video.videoWidth) continue;
+      ctx.save();
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
       ctx.drawImage(video, 0, 0, w, h);
-      const cur = ctx.getImageData(0, 0, w, h).data;
-      if (prev) {
+      ctx.restore();
+      const im = ctx.getImageData(0, 0, w, h);
+      cxSamples.push(LivenessCore.centroidXNormalizedFromImageData(im, w, h));
+      if (prevData) {
+        const cur = im.data;
         let s = 0;
         for (let i = 0; i < cur.length; i += 20) {
           s +=
-            Math.abs(cur[i] - prev[i]) +
-            Math.abs(cur[i + 1] - prev[i + 1]) +
-            Math.abs(cur[i + 2] - prev[i + 2]);
+            Math.abs(cur[i] - prevData[i]) +
+            Math.abs(cur[i + 1] - prevData[i + 1]) +
+            Math.abs(cur[i + 2] - prevData[i + 2]);
         }
         const denom = (cur.length / 20) * 3;
-        const norm = s / denom;
-        diffs.push(norm);
+        diffs.push(s / denom);
       }
-      prev = new Uint8Array(cur);
+      prevData = new Uint8Array(im.data);
     }
-    return LivenessCore.motionPassFromDiffNorms(diffs);
+    const poseOk = LivenessCore.poseDecisionFromCxSeries(cxSamples, direction);
+    const motionOk = LivenessCore.motionLiveEnoughForPose(diffs);
+    return poseOk && motionOk;
   }
 
   function verifyLivenessPhraseText(spokenOrTyped) {
@@ -864,8 +908,8 @@
       await vid.play().catch(() => {});
       document.getElementById('liveness-step-1').style.display = 'none';
       document.getElementById('liveness-step-2').style.display = 'block';
-      livenessSetStepLabel('Step 2 of 3 · Motion');
-      document.getElementById('liveness-start-motion').disabled = false;
+      setPoseStepUI(0);
+      document.getElementById('liveness-pose-run').disabled = false;
     } catch (err) {
       livenessSetError(
         err.name === 'NotAllowedError'
@@ -875,19 +919,25 @@
     }
   }
 
-  async function onLivenessStartMotion() {
-    const btn = document.getElementById('liveness-start-motion');
+  async function onLivenessPoseRun() {
+    const btn = document.getElementById('liveness-pose-run');
     const vid = document.getElementById('liveness-preview');
+    const dir = LIVENESS_POSE_SEQUENCE[livenessPoseIndex];
     livenessSetError('');
     btn.disabled = true;
-    btn.textContent = 'Checking motion…';
-    const ok = await runLivenessMotionCheck(vid);
-    btn.textContent = 'Start motion check';
+    btn.textContent = 'Checking…';
+    const ok = await runPoseSegment(vid, dir);
+    btn.textContent = 'Run pose check';
     btn.disabled = false;
     if (!ok) {
       livenessSetError(
-        'We did not detect enough movement. Ensure your face is visible and move gently, then try again.'
+        'Pose not verified. Follow the direction, stay in frame, use even lighting, then try again.'
       );
+      return;
+    }
+    livenessPoseIndex += 1;
+    if (livenessPoseIndex < LIVENESS_POSE_SEQUENCE.length) {
+      setPoseStepUI(livenessPoseIndex);
       return;
     }
     livenessChallengePhrase =
@@ -897,7 +947,7 @@
     document.getElementById('liveness-phrase-display').textContent = livenessChallengePhrase;
     document.getElementById('liveness-step-2').style.display = 'none';
     document.getElementById('liveness-step-3').style.display = 'block';
-    livenessSetStepLabel('Step 3 of 3 · Phrase');
+    livenessSetStepLabel('Step 4 of 4 · Phrase');
     document.getElementById('liveness-phrase-status').textContent =
       'Speak the phrase, or type both words and click Verify typed phrase.';
   }
@@ -928,11 +978,11 @@
 
   function setupLivenessGateListeners() {
     const a = document.getElementById('liveness-start-camera');
-    const b = document.getElementById('liveness-start-motion');
+    const b = document.getElementById('liveness-pose-run');
     const c = document.getElementById('liveness-speak-verify');
     const d = document.getElementById('liveness-type-verify');
     if (a) a.addEventListener('click', onLivenessAllowCamera);
-    if (b) b.addEventListener('click', onLivenessStartMotion);
+    if (b) b.addEventListener('click', onLivenessPoseRun);
     if (c) c.addEventListener('click', onLivenessSpeakVerify);
     if (d) d.addEventListener('click', onLivenessTypeVerify);
   }

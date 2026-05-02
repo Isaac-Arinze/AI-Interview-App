@@ -17,6 +17,46 @@ describe('LivenessCore', () => {
     });
   });
 
+  describe('poseDecisionFromCxSeries', () => {
+    test('passes turn right when centroid shifts right (mirrored convention)', () => {
+      const s = [0.48, 0.48, 0.5, 0.55, 0.58, 0.59, 0.6];
+      expect(LivenessCore.poseDecisionFromCxSeries(s, 'right')).toBe(true);
+    });
+
+    test('passes turn left when centroid shifts left', () => {
+      const s = [0.58, 0.57, 0.52, 0.46, 0.44, 0.43, 0.42];
+      expect(LivenessCore.poseDecisionFromCxSeries(s, 'left')).toBe(true);
+    });
+
+    test('passes look straight when centered and steady', () => {
+      const s = [0.44, 0.48, 0.5, 0.51, 0.5, 0.49, 0.5, 0.51];
+      expect(LivenessCore.poseDecisionFromCxSeries(s, 'straight')).toBe(true);
+    });
+
+    test('fails right when range too small', () => {
+      const s = [0.5, 0.501, 0.502, 0.501, 0.5, 0.501];
+      expect(LivenessCore.poseDecisionFromCxSeries(s, 'right')).toBe(false);
+    });
+  });
+
+  describe('centroidXNormalizedFromImageData', () => {
+    test('leans toward brighter right side', () => {
+      const w = 10;
+      const h = 10;
+      const data = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const v = x > 5 ? 250 : 20;
+          data[i] = data[i + 1] = data[i + 2] = v;
+          data[i + 3] = 255;
+        }
+      }
+      const cx = LivenessCore.centroidXNormalizedFromImageData({ data }, w, h);
+      expect(cx).toBeGreaterThan(0.55);
+    });
+  });
+
   describe('motionPassFromDiffNorms', () => {
     test('fails on empty or flat low motion', () => {
       expect(LivenessCore.motionPassFromDiffNorms([])).toBe(false);
@@ -31,6 +71,12 @@ describe('LivenessCore', () => {
     test('passes via high variance without three spikes', () => {
       const diffs = [0.5, 3.0, 0.5, 3.0, 0.5, 3.0, 0.5];
       expect(LivenessCore.motionPassFromDiffNorms(diffs)).toBe(true);
+    });
+  });
+
+  describe('motionLiveEnoughForPose', () => {
+    test('accepts moderate single spikes for small head motion', () => {
+      expect(LivenessCore.motionLiveEnoughForPose([0.2, 2.2, 0.3])).toBe(true);
     });
   });
 
