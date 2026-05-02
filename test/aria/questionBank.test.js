@@ -1,13 +1,12 @@
-/**
- * Unit Tests for ARIA Question Bank
- */
+
 
 const {
   questionBank,
   getInterviewQuestions,
   getQuestionByIndex,
   getTotalQuestionCount,
-  getQuestionsByPhase
+  getQuestionsByPhase,
+  takeFirstNInterviewQuestions
 } = require('../../src/aria/questionBank');
 
 describe('Question Bank', () => {
@@ -286,6 +285,25 @@ describe('Question Bank', () => {
         expect(phase4.length).toBeGreaterThan(0);
         expect(phase4[0].role).toBe(role);
       });
+    });
+  });
+
+  describe('Short interview (first N questions)', () => {
+    test('takeFirstNInterviewQuestions keeps two items and reindexes', () => {
+      const full = getInterviewQuestions('Software Engineer');
+      const short = takeFirstNInterviewQuestions(full, 2);
+      expect(short.length).toBe(2);
+      expect(short[0].question_index).toBe(0);
+      expect(short[1].question_index).toBe(1);
+      expect(short[0].text).toBe(full[0].text);
+      expect(short[1].text).toBe(full[1].text);
+    });
+
+    test('takeFirstNInterviewQuestions clamps to available length', () => {
+      const one = [{ question_index: 5, text: 'Only', phase: 1, type: 'warmup' }];
+      const out = takeFirstNInterviewQuestions(one, 2);
+      expect(out.length).toBe(1);
+      expect(out[0].question_index).toBe(0);
     });
   });
 

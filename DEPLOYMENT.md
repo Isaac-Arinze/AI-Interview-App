@@ -63,11 +63,6 @@ heroku logs --tail
 
 ---
 
-### Option 3: Railway.app (FREE - Pay as you go)
-
-**Prerequisites:**
-- Railway account (https://railway.app)
-- GitHub connected
 
 **Steps:**
 1. Go to https://railway.app

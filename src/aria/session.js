@@ -163,7 +163,7 @@ class ARIASession {
    */
   getSummary() {
     const answeredCount = this.answers.length;
-    const skippedCount = this.question_index - answeredCount;
+    const skippedCount = Math.max(0, this.question_index - answeredCount);
     
     const totalScore = this.answers.length > 0
       ? this.answers.reduce((sum, a) => sum + (a.scores.total || 0), 0) / this.answers.length

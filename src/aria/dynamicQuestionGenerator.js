@@ -45,6 +45,11 @@ const roleDefinitions = {
     skills: ['user research', 'prototyping', 'design thinking', 'user testing'],
     keywords: ['user empathy', 'wireframing', 'accessibility', 'design systems'],
     domain: 'design'
+  },
+  Marketing: {
+    skills: ['campaign strategy', 'channel planning', 'content', 'brand positioning'],
+    keywords: ['conversion', 'audience targeting', 'messaging', 'growth metrics'],
+    domain: 'marketing'
   }
 };
 
@@ -185,6 +190,40 @@ const roleSpecificTemplates = {
       skill: 'design systems',
       variations: ['creating design systems', 'component design', 'design documentation']
     }
+  ],
+  marketing: [
+    {
+      template: "Describe a [SKILL] initiative you owned end to end. What was the goal, what did you execute, and how did you measure success?",
+      skill: 'campaign',
+      variations: ['marketing campaign', 'multi-channel launch', 'demand-generation program']
+    },
+    {
+      template: "Tell me about a time [SKILL] forced you to change course. What signals did you use and what was the outcome?",
+      skill: 'performance data',
+      variations: ['underperforming campaign metrics', 'shifting conversion rates', 'weak channel ROI']
+    },
+    {
+      template: "How do you approach [SKILL] when stakeholders disagree? Give a concrete example.",
+      skill: 'positioning and messaging',
+      variations: ['brand versus performance trade-offs', 'messaging alignment', 'creative direction debates']
+    }
+  ],
+  general: [
+    {
+      template: "Describe a professional situation where [SKILL] was essential. What was at stake and how did you handle it?",
+      skill: 'stakeholder communication',
+      variations: ['managing expectations', 'aligning cross-functional partners', 'presenting recommendations']
+    },
+    {
+      template: "Tell me about a time you had to improve [SKILL] with limited resources. What did you prioritize?",
+      skill: 'outcomes',
+      variations: ['team results', 'process quality', 'customer or internal satisfaction']
+    },
+    {
+      template: "Walk me through how you approach [SKILL] when information is incomplete. What example best illustrates this?",
+      skill: 'decision-making',
+      variations: ['making a timely call', 'structuring a plan with gaps', 'de-risking uncertainty']
+    }
   ]
 };
 
@@ -243,8 +282,9 @@ function createDynamicRoleDefinition(role) {
  */
 function generateRoleSpecificQuestions(role, baseIndex = 8) {
   const roleDef = getRoleDefinition(role);
-  const templates = roleSpecificTemplates[roleDef.domain] || roleSpecificTemplates['engineering'];
-  
+  const templates =
+    roleSpecificTemplates[roleDef.domain] || roleSpecificTemplates.general;
+
   const questions = [];
 
   // Select up to 3 templates and instantiate with role context
@@ -253,7 +293,11 @@ function generateRoleSpecificQuestions(role, baseIndex = 8) {
   selectedTemplates.forEach((templateObj, idx) => {
     const variation = templateObj.variations[idx % templateObj.variations.length];
     // Replace ALL occurrences of [SKILL] placeholder
-    const text = templateObj.template.replaceAll('[SKILL]', variation);
+    const body = templateObj.template.replaceAll('[SKILL]', variation);
+    const text =
+      role && role !== 'Unspecified'
+        ? `For the ${role} position: ${body}`
+        : body;
 
     questions.push({
       question_index: baseIndex + idx,

@@ -11,7 +11,7 @@ const StateTransitions = require('./src/aria/stateTransitions');
 const Evaluator = require('./src/aria/evaluator');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
@@ -27,6 +27,57 @@ if (!fs.existsSync(uploadsDir)) {
 // ARIA session store (in-memory; use Redis/DB in production)
 const sessions = new Map();
 
+async function fetchRoleQuestionsFromAPI(role) {
+  const url = process.env.QUESTION_API_URL;
+  if (!url) return null;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.QUESTION_API_KEY) {
+      headers['Authorization'] = 'Bearer ' + process.env.QUESTION_API_KEY;
+    }
+    let response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ role })
+    });
+    if (!response.ok) {
+      response = await fetch(
+        url.includes('?') ? `${url}&role=${encodeURIComponent(role)}` : `${url}?role=${encodeURIComponent(role)}`
+      );
+    }
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const items = data.slice(0, 3);
+    const questions = items.map((q, idx) => {
+      const text = typeof q === 'string' ? q : q?.text || '';
+      return {
+        question_index: 8 + idx,
+        text,
+        phase: 4,
+        type: 'role-specific',
+        role,
+        expected_duration_range: [40, 100]
+      };
+    }).filter(q => q.text && q.text.trim().length > 0);
+    if (questions.length === 0) return null;
+    while (questions.length < 3) {
+      const fallback = (idx) => ({
+        question_index: 8 + idx,
+        text: `Describe your experience relevant to ${role}.`,
+        phase: 4,
+        type: 'role-specific',
+        role,
+        expected_duration_range: [40, 100]
+      });
+      questions.push(fallback(questions.length));
+    }
+    return questions;
+  } catch {
+    return null;
+  }
+}
+
 // ==========================================
 // ARIA Interview API Routes
 // ==========================================
@@ -35,25 +86,58 @@ const sessions = new Map();
  * POST /api/aria/session/init
  * Initialize a new interview session
  */
-app.post('/api/aria/session/init', (req, res) => {
+app.post('/api/aria/session/init', async (req, res) => {
   try {
-    const { name = 'Candidate', role = 'Unspecified', language = 'en-US' } = req.body;
+    const {
+      name = 'Candidate',
+      role = 'Unspecified',
+      language = 'en-US',
+      short_interview = false
+    } = req.body;
+    const isShortInterview =
+      short_interview === true || short_interview === 'true';
     
     const session = new ARIASession(null, { name, role, language });
     sessions.set(session.session_id, session);
 
-    // First question setup
-    const questions = QuestionBank.getInterviewQuestions(role);
+    const baseQuestions = QuestionBank.buildTailoredBaseQuestions(role);
+    let roleSpecific = await fetchRoleQuestionsFromAPI(role);
+    if (!roleSpecific) {
+      roleSpecific = QuestionBank.generateRoleSpecificQuestions(role, 8);
+    } else {
+      roleSpecific = roleSpecific.map((q, idx) => ({
+        ...q,
+        question_index: 8 + idx,
+        phase: 4,
+        type: 'role-specific',
+        role
+      })).slice(0, 3);
+    }
+    const useRole = role && role !== 'Unspecified';
+    const candidateQA = QuestionBank.questionBank.phase5_candidateQA.map(q => ({
+      ...q,
+      text: useRole
+        ? `Do you have any questions for us about this ${role} role or the team?`
+        : q.text
+    }));
+    candidateQA[0].question_index = 11;
+    let questions = [...baseQuestions, ...roleSpecific, ...candidateQA];
+    if (isShortInterview) {
+      questions = QuestionBank.takeFirstNInterviewQuestions(questions, 2);
+    }
+    session.questions = questions;
     const firstQuestion = questions[0];
 
     res.json({
       success: true,
       session_id: session.session_id,
       candidate: session.candidate,
+      interview_mode: isShortInterview ? 'short' : 'full',
+      total_questions: questions.length,
       current_question: {
         index: 0,
         text: firstQuestion.text,
-        phase: 1,
+        phase: firstQuestion.phase,
         type: firstQuestion.type,
         expected_duration: firstQuestion.expected_duration_range
       }
@@ -79,15 +163,16 @@ app.post('/api/aria/submit-answer', (req, res) => {
     // Record answer
     session.recordAnswer(transcript, parseFloat(confidence), parseFloat(duration_seconds), []);
 
-    // Evaluate answer
-    const questions = QuestionBank.getInterviewQuestions(session.candidate.role);
+    const questions = Array.isArray(session.questions) && session.questions.length > 0
+      ? session.questions
+      : QuestionBank.getInterviewQuestions(session.candidate.role);
     const currentQuestion = questions[session.question_index];
 
     const evaluation = Evaluator.evaluateAnswer({
       transcript,
       duration_seconds: parseFloat(duration_seconds),
       confidence: parseFloat(confidence),
-      phase: Math.ceil((session.question_index + 1) / 2),
+      phase: currentQuestion?.phase || Math.ceil((session.question_index + 1) / 2),
       type: currentQuestion?.type || 'standard'
     });
 
@@ -99,7 +184,6 @@ app.post('/api/aria/submit-answer', (req, res) => {
       communication: evaluation.communication
     });
 
-    // Determine next state (pass total questions count)
     const nextState = StateTransitions.getNextStateAfterEvaluation(session, evaluation, questions.length);
     const acknowledgment = Evaluator.getAcknowledgmentPhrase(evaluation.total || 50);
 
@@ -143,7 +227,9 @@ app.get('/api/aria/session/:id', (req, res) => {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
-    const questions = QuestionBank.getInterviewQuestions(session.candidate.role);
+    const questions = Array.isArray(session.questions) && session.questions.length > 0
+      ? session.questions
+      : QuestionBank.getInterviewQuestions(session.candidate.role);
     const currentQuestion = questions[session.question_index] || null;
 
     res.json({
